@@ -1,4 +1,4 @@
-# ESP32-C3 Ultra Edition v4.1
+# ESP32-C3 Ultra Edition v1.0
 
 ![Version](https://img.shields.io/badge/version-1.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-ESP32--C3-green.svg)
@@ -104,6 +104,70 @@ System:
 - CHARGING_PIN: GPIO 1 (ADC)
 ```
 
+### Wiring Diagram
+```
+                        ESP32-C3 SuperMini
+                    ┌─────────────────────┐
+                    │                     │
+        ┌───────────┤ 3V3            GND  ├───────────┐
+        │           │                     │           │
+        │      ┌────┤ GPIO 20 (SDA)       │           │
+        │      │    │                     │           │
+        │      │ ┌──┤ GPIO 21 (SCL)       │           │
+        │      │ │  │                     │           │
+   BTN_UP ─────┼─┼──┤ GPIO 5         GPIO 8├───[LED]──┤
+        │      │ │  │                     │           │
+   BTN_DOWN ───┼─┼──┤ GPIO 6         GPIO 0├──[BAT+]  │
+        │      │ │  │                     │           │
+   BTN_LEFT ───┼─┼──┤ GPIO 3         GPIO 1├──[CHG]   │
+        │      │ │  │                     │           │
+   BTN_RIGHT ──┼─┼──┤ GPIO 4              │           │
+        │      │ │  │                     │           │
+   BTN_SELECT ─┼─┼──┤ GPIO 9              │           │
+        │      │ │  │                     │           │
+   BTN_BACK ───┼─┼──┤ GPIO 2              │           │
+        │      │ │  │                     │           │
+        │      │ │  └─────────────────────┘           │
+        │      │ │                                    │
+        │      │ └────────────┬─────────────────────┐ │
+        │      └─────────────┬┴┐                    │ │
+        │                 ┌──┴─┴──┐                 │ │
+        │                 │ OLED  │                 │ │
+        │                 │128x64 │                 │ │
+        │                 │SSD1306│                 │ │
+        │                 ├───────┤                 │ │
+        ├─────────────────┤ VCC   ├─────────────────┘ │
+        │                 │ GND   ├───────────────────┘
+        │                 │ SCL   │ (to GPIO 21)
+        │                 │ SDA   │ (to GPIO 20)
+        │                 └───────┘
+        │
+        │     ┌────────────────────────────┐
+        └─────┤  All Buttons Configuration │
+              ├────────────────────────────┤
+              │  [Button] ──┬── [GPIO]    │
+              │             └── [GND]      │
+              │  (Internal Pull-up: ON)    │
+              └────────────────────────────┘
+
+    Battery Monitoring Circuit:
+    
+    Battery (+) ──┬─── [10kΩ] ──┬─── GPIO 0 (ADC)
+                  │             │
+                  │         [10kΩ]
+                  │             │
+    Charger (+) ──┼─── [10kΩ] ──┼─── GPIO 1 (ADC)
+                  │             │
+                  │            GND
+                  │
+    Battery (-) ──┴─── GND
+
+    Notes:
+    - Voltage divider ratio: 2.0
+    - Max input voltage: 4.2V (fully charged LiPo)
+    - Min input voltage: 3.3V (discharged)
+```
+
 ### Circuit Notes
 - Voltage divider ratio: 2.0 (for battery monitoring)
 - Battery range: 3.3V - 4.2V
@@ -124,7 +188,7 @@ Install these libraries via Arduino Library Manager:
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/silentprojectid/AI-pocket.git
+   git clone https://github.com/sanzxprojectid/AI-pocket.git
    cd AI-pocket
    ```
 
@@ -257,10 +321,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 👤 Author
 
-**Silent Project**
+**Sanzx Project**
 
-- GitHub: [@silentprojectid](https://github.com/silentprojectid)
-- Project: [AI-pocket](https://github.com/silentprojectid/AI-pocket)
+- GitHub: [@sanzxprojectid](https://github.com/sanzxprojectid)
+- Project: [AI-pocket](https://github.com/sanzxprojectid/AI-pocket)
 - Instagram: [@sanzx_project.id](https://instagram.com/sanzx_project.id)
 
 ## 🙏 Acknowledgments
@@ -290,8 +354,8 @@ This project is for educational purposes. Use Gemini API responsibly and within 
 
 ---
 
-**Made with ❤️ by sanzx_project.id**
+**Made with ❤️ by Sanzx_Project.id**
 
 *Star ⭐ this repository if you find it useful!*
 
-**Repository**: [github.com/silentprojectid/AI-pocket](https://github.com/silentprojectid/AI-pocket)
+**Repository**: [github.com/sanzxprojectid/AI-pocket](https://github.com/sanzxprojectid/AI-pocket)
