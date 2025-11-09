@@ -2,7 +2,7 @@
 
 ![Version](https://img.shields.io/badge/version-1.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-ESP32--C3-green.svg)
-![License](https://img.shields.io/badge/license-MIT-orange.svg)
+![License](https://img.shields.io/badge/license-GPL--3.0-orange.svg)
 
 A powerful multifunctional ESP32-C3 device featuring AI integration, wireless mesh networking, battery monitoring, and advanced power management.
 
@@ -317,7 +317,16 @@ Contributions are welcome! Please:
 
 ## 📝 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
+### Key Points:
+- ✅ Free to use, modify, and distribute
+- ✅ Must disclose source code
+- ✅ Must use same GPL-3.0 license
+- ✅ Must state changes made
+- ❌ No warranty provided
+
+For more information: [GNU GPL v3.0](https://www.gnu.org/licenses/gpl-3.0.html)
 
 ## 👤 Author
 
@@ -335,8 +344,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - All contributors and testers
 
 ## 📸 Screenshots
-
-![sanzx official_board](https://github.com/user-attachments/assets/faf49c4c-f4d0-4add-8145-0e406226de92)
+![sanzx official board](https://github.com/user-attachments/assets/9b1cf72b-a93f-42fa-9eea-3e5932d33a80)
 
 
 ## 🔮 Future Plans
@@ -355,7 +363,7 @@ This project is for educational purposes. Use Gemini API responsibly and within 
 
 ---
 
-**Made with ❤️ by Sanzx_Project.id**
+**Made with ❤️ by Sanzx Project**
 
 *Star ⭐ this repository if you find it useful!*
 
