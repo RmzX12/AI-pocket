@@ -204,6 +204,7 @@ enum AppState {
   STATE_ESP_NOW_RENAME_PEER,
   STATE_ABOUT,
   STATE_SNAKE_GAME,
+  STATE_PONG_GAME,
   STATE_LOADING
 };
 
@@ -237,6 +238,17 @@ bool gameOver;
 int score;
 int highScore;
 unsigned long lastSnakeMove;
+
+// Pong Game
+#define PADDLE_HEIGHT 16
+#define PADDLE_WIDTH 4
+int playerY, opponentY;
+float ballX, ballY;
+float ballVelX, ballVelY;
+int playerScore, opponentScore;
+bool pongGameOver;
+unsigned long lastPongUpdate;
+
 
 // Icons (8x8 pixel bitmaps)
 const unsigned char ICON_WIFI[] PROGMEM = {
@@ -279,6 +291,11 @@ const unsigned char ICON_SNAKE[] PROGMEM = {
   0x00, 0x18, 0x24, 0x4C, 0x48, 0x70, 0x00, 0x00
 };
 
+const unsigned char ICON_PONG[] PROGMEM = {
+  0x0C, 0x18, 0x18, 0x18, 0x18, 0x18, 0x0C, 0x00
+};
+
+
 // Forward declarations
 void showMainMenu();
 void showWiFiMenu();
@@ -305,6 +322,9 @@ void showAbout();
 void initSnakeGame();
 void showSnakeGame();
 void updateSnakeGame();
+void initPongGame();
+void showPongGame();
+void updatePongGame();
 void showLoadingAnimation();
 void showProgressBar(String title, int percent);
 void displayWiFiNetworks();
@@ -606,6 +626,9 @@ void loop() {
         break;
       case STATE_SNAKE_GAME:
         updateSnakeGame();
+        break;
+      case STATE_PONG_GAME:
+        updatePongGame();
         break;
       case STATE_MAIN_MENU:
       default:
@@ -920,7 +943,12 @@ void updateSnakeGame() {
     return;
   }
 
-  if (millis() - lastSnakeMove > 200) {
+  int snakeSpeed = 200 - (score * 5);
+  if (snakeSpeed < 50) {
+    snakeSpeed = 50;
+  }
+
+  if (millis() - lastSnakeMove > snakeSpeed) {
     lastSnakeMove = millis();
 
     SnakeSegment newHead = snake[0];
@@ -983,6 +1011,106 @@ void updateSnakeGame() {
 
     showSnakeGame();
   }
+}
+
+// ========== PONG GAME ==========
+
+void initPongGame() {
+  playerY = opponentY = SCREEN_HEIGHT / 2 - PADDLE_HEIGHT / 2;
+  ballX = SCREEN_WIDTH / 2;
+  ballY = SCREEN_HEIGHT / 2;
+  ballVelX = 2.0;
+  ballVelY = 1.5;
+  playerScore = 0;
+  opponentScore = 0;
+  pongGameOver = false;
+  lastPongUpdate = millis();
+}
+
+void showPongGame() {
+  display.clearDisplay();
+
+  // Draw paddles
+  display.fillRect(0, playerY, PADDLE_WIDTH, PADDLE_HEIGHT, SSD1306_WHITE);
+  display.fillRect(SCREEN_WIDTH - PADDLE_WIDTH, opponentY, PADDLE_WIDTH, PADDLE_HEIGHT, SSD1306_WHITE);
+
+  // Draw ball
+  display.fillCircle(ballX, ballY, 3, SSD1306_WHITE);
+
+  // Draw scores
+  display.setTextSize(1);
+  display.setCursor(SCREEN_WIDTH / 2 - 20, 2);
+  display.print(playerScore);
+  display.setCursor(SCREEN_WIDTH / 2 + 14, 2);
+  display.print(opponentScore);
+
+  // Draw center line
+  for (int i = 0; i < SCREEN_HEIGHT; i += 4) {
+    display.drawPixel(SCREEN_WIDTH / 2, i, SSD1306_WHITE);
+  }
+
+  if (pongGameOver) {
+    display.setTextSize(2);
+    display.setCursor(20, 20);
+    display.print("GAME OVER");
+  }
+
+  display.display();
+}
+
+void updatePongGame() {
+  if (pongGameOver) {
+    return;
+  }
+
+  if (millis() - lastPongUpdate < 16) { // ~60 FPS
+    return;
+  }
+  lastPongUpdate = millis();
+
+  // Ball movement
+  ballX += ballVelX;
+  ballY += ballVelY;
+
+  // Wall collision (top/bottom)
+  if (ballY < 0 || ballY > SCREEN_HEIGHT) {
+    ballVelY = -ballVelY;
+  }
+
+  // Paddle collision (player)
+  if (ballX < PADDLE_WIDTH && ballY > playerY && ballY < playerY + PADDLE_HEIGHT) {
+    ballVelX = -ballVelX;
+  }
+
+  // Paddle collision (opponent)
+  if (ballX > SCREEN_WIDTH - PADDLE_WIDTH && ballY > opponentY && ballY < opponentY + PADDLE_HEIGHT) {
+    ballVelX = -ballVelX;
+  }
+
+  // Score
+  if (ballX < 0) {
+    opponentScore++;
+    ballX = SCREEN_WIDTH / 2;
+    ballY = SCREEN_HEIGHT / 2;
+  } else if (ballX > SCREEN_WIDTH) {
+    playerScore++;
+    ballX = SCREEN_WIDTH / 2;
+    ballY = SCREEN_HEIGHT / 2;
+  }
+
+  // Opponent AI
+  if (opponentY + PADDLE_HEIGHT / 2 < ballY) {
+    opponentY += 1;
+  } else {
+    opponentY -= 1;
+  }
+  opponentY = max(0, min(SCREEN_HEIGHT - PADDLE_HEIGHT, opponentY));
+
+  if (playerScore >= 5 || opponentScore >= 5) {
+    pongGameOver = true;
+  }
+
+  showPongGame();
 }
 
 // ========== WIFI MENU ==========
@@ -1943,6 +2071,9 @@ void refreshCurrentScreen() {
     case STATE_SNAKE_GAME:
       showSnakeGame();
       break;
+    case STATE_PONG_GAME:
+      showPongGame();
+      break;
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
       drawKeyboard();
@@ -2071,7 +2202,7 @@ void drawWiFiSignalBars() {
 void handleUp() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      menuSelection = (menuSelection - 1 + 9) % 9;
+      menuSelection = (menuSelection - 1 + 10) % 10;
       showMainMenu();
       break;
     case STATE_WIFI_MENU:
@@ -2147,13 +2278,17 @@ void handleUp() {
     case STATE_SNAKE_GAME:
       if (snakeDir != DIR_DOWN) snakeDir = DIR_UP;
       break;
+    case STATE_PONG_GAME:
+      playerY -= 5;
+      if (playerY < 0) playerY = 0;
+      break;
   }
 }
 
 void handleDown() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      menuSelection = (menuSelection + 1) % 9;
+      menuSelection = (menuSelection + 1) % 10;
       showMainMenu();
       break;
     case STATE_WIFI_MENU:
@@ -2228,6 +2363,10 @@ void handleDown() {
       break;
     case STATE_SNAKE_GAME:
       if (snakeDir != DIR_UP) snakeDir = DIR_DOWN;
+      break;
+    case STATE_PONG_GAME:
+      playerY += 5;
+      if (playerY > SCREEN_HEIGHT - PADDLE_HEIGHT) playerY = SCREEN_HEIGHT - PADDLE_HEIGHT;
       break;
   }
 }
@@ -2508,6 +2647,11 @@ void handleSelect() {
     case STATE_SNAKE_GAME:
       if (gameOver) {
         initSnakeGame();
+      }
+      break;
+    case STATE_PONG_GAME:
+      if (pongGameOver) {
+        initPongGame();
       }
       break;
   }
@@ -3421,13 +3565,14 @@ void showMainMenu() {
     {"ESP-NOW", ICON_MESSAGE},
     {"Settings", ICON_SETTINGS},
     {"Snake Game", ICON_SNAKE},
+    {"Pong Game", ICON_PONG},
     {"About", ICON_DEV}
   };
   
   int startY = 10;
   int visibleItems = 5;
   int startIdx = max(0, menuSelection - 2);
-  int endIdx = min(9, startIdx + visibleItems);
+  int endIdx = min(10, startIdx + visibleItems);
   
   for (int i = startIdx; i < endIdx; i++) {
     int y = startY + (i - startIdx) * 10;
@@ -3506,7 +3651,12 @@ void handleMainMenuSelect() {
       currentState = STATE_SNAKE_GAME;
       initSnakeGame();
       break;
-    case 8: // About
+    case 8: // Pong Game
+      previousState = currentState;
+      currentState = STATE_PONG_GAME;
+      initPongGame();
+      break;
+    case 9: // About
       previousState = currentState;
       currentState = STATE_ABOUT;
       scrollOffset = 0;
