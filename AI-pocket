@@ -24,7 +24,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define BTN_LEFT 3
 #define BTN_RIGHT 4
 #define BTN_SELECT 9
-#define BTN_BACK 2  // NEW: Tombol Back
+#define BTN_BACK 2
 
 // LED Built-in
 #define LED_BUILTIN 8
@@ -57,7 +57,7 @@ const int wifiPerPage = 4;
 
 // WiFi Auto-off settings
 unsigned long lastWiFiActivity = 0;
-const unsigned long wifiTimeout = 300000; // 5 menit
+const unsigned long wifiTimeout = 300000;
 bool wifiAutoOffEnabled = false;
 
 // Calculator
@@ -94,7 +94,7 @@ uint32_t freeHeap = 0;
 uint32_t totalHeap = 0;
 uint32_t minFreeHeap = 0;
 float cpuFreq = 0;
-float cpuTemp = 0;  // NEW: CPU Temperature
+float cpuTemp = 0;
 bool lowMemoryWarning = false;
 uint32_t loopCount = 0;
 unsigned long lastLoopCount = 0;
@@ -109,9 +109,10 @@ int zenBreathPhase = 0;
 bool devModeEnabled = false;
 unsigned long devModeDebugTimer = 0;
 
-// ESP-NOW Messaging
+// ESP-NOW Messaging - FIXED STRUCTURE
 #define MAX_ESP_PEERS 5
 #define MAX_MESSAGES 10
+
 struct Message {
   char text[200];
   uint8_t sender[6];
@@ -120,10 +121,21 @@ struct Message {
 };
 Message inbox[MAX_MESSAGES];
 int inboxCount = 0;
-uint8_t peerAddresses[MAX_ESP_PEERS][6];
+
+struct PeerInfo {
+  uint8_t macAddr[6];
+  String name;
+};
+PeerInfo peers[MAX_ESP_PEERS];
 int peerCount = 0;
+
+// FIXED: Separated variables for different contexts
+int espnowMenuSelection = 0;      // For ESP-NOW main menu
+int espnowPeerSelection = 0;      // For peer list navigation
+int espnowInboxSelection = 0;     // For inbox navigation
+int espnowPeerOptionsSelection = 0; // For peer options menu
+
 String outgoingMessage = "";
-int selectedPeer = 0;
 
 // Breadcrumb navigation
 String breadcrumb = "";
@@ -161,8 +173,25 @@ const char* keyboardNumbers[3][10] = {
   {"#", "-", "_", "=", "+", "[", "]", "?", ".", "OK"}
 };
 
-enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
+// NEW: Keyboard khusus untuk MAC address (hex only)
+const char* keyboardMac[3][10] = {
+  {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"},
+  {"A", "B", "C", "D", "E", "F", "<", "<", "<", "<"},
+  {"#", "#", "#", "#", "#", "#", "#", "#", " ", "OK"}
+};
+
+enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS, MODE_MAC };
 KeyboardMode currentKeyboardMode = MODE_LOWER;
+
+// FIXED: Better keyboard context tracking
+enum KeyboardContext {
+  CONTEXT_CHAT,
+  CONTEXT_ESPNOW_MESSAGE,
+  CONTEXT_ESPNOW_PEER_NAME,
+  CONTEXT_ESPNOW_MAC,
+  CONTEXT_WIFI_PASSWORD
+};
+KeyboardContext keyboardContext = CONTEXT_CHAT;
 
 enum AppState {
   STATE_WIFI_MENU,
@@ -188,11 +217,19 @@ enum AppState {
   STATE_ESP_NOW_SEND,
   STATE_ESP_NOW_INBOX,
   STATE_ESP_NOW_PEERS,
+  STATE_ESP_NOW_PEER_OPTIONS,
   STATE_LOADING
 };
 
 AppState currentState = STATE_MAIN_MENU;
 AppState previousState = STATE_MAIN_MENU;
+
+// Main Menu Animation Variables
+float menuScrollY = 0;
+float menuTargetScrollY = 0;
+int mainMenuSelection = 0;
+float menuTextScrollX = 0;
+unsigned long lastMenuTextScrollTime = 0;
 
 int cursorX = 0, cursorY = 0;
 String userInput = "";
@@ -200,7 +237,7 @@ String passwordInput = "";
 String selectedSSID = "";
 String aiResponse = "";
 int scrollOffset = 0;
-int menuSelection = 0;
+int menuSelection = 0;  // Generic menu selection
 unsigned long lastDebounce = 0;
 const unsigned long debounceDelay = 200;
 int powerMenuSelection = 0;
@@ -259,6 +296,7 @@ void showESPNowMenu();
 void showESPNowSend();
 void showESPNowInbox();
 void showESPNowPeers();
+void showESPNowPeerOptions();
 void showLoadingAnimation();
 void showProgressBar(String title, int percent);
 void displayWiFiNetworks();
@@ -270,6 +308,7 @@ void handleAPISelectSelect();
 void handleSettingsMenuSelect();
 void handleKeyPress();
 void handlePasswordKeyPress();
+void handleMacAddressKeyPress();
 void handleCalculatorInput();
 void handleBackButton();
 void connectToWiFi(String ssid, String password);
@@ -301,7 +340,10 @@ void onESPNowDataReceived(const esp_now_recv_info_t *info, const uint8_t *data, 
 void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status);
 void initESPNow();
 void sendESPNowMessage(String message, uint8_t* targetMac);
-void addPeer(uint8_t* macAddr);
+void addPeer(uint8_t* macAddr, String name = "");
+void deletePeer(int index);
+void savePeers();
+void loadPeers();
 
 // LED Patterns
 void ledHeartbeat() {
@@ -326,7 +368,6 @@ void ledBreathing() {
 }
 
 void ledZenMode() {
-  // Sangat lambat: 1x per menit (60000ms)
   digitalWrite(LED_BUILTIN, (millis() / 60000) % 2);
 }
 
@@ -354,11 +395,99 @@ void ledQuickFlash() {
   digitalWrite(LED_BUILTIN, LOW);
 }
 
+// FIXED: MAC address input handler dengan keyboard khusus
+void handleMacAddressKeyPress() {
+  const char* key = getCurrentKey();
+  String mac = userInput;
+
+  if (strcmp(key, "OK") == 0) {
+    // Validasi format MAC address
+    if (mac.length() == 17) {
+      uint8_t macAddr[6];
+      int MacValue[6];
+      
+      // Parse MAC address
+      if (sscanf(mac.c_str(), "%x:%x:%x:%x:%x:%x", 
+                 &MacValue[0], &MacValue[1], &MacValue[2], 
+                 &MacValue[3], &MacValue[4], &MacValue[5]) == 6) {
+        
+        for(int i = 0; i < 6; ++i) {
+          macAddr[i] = (uint8_t)MacValue[i];
+        }
+        
+        // Check if peer already exists
+        bool peerExists = false;
+        for (int i = 0; i < peerCount; i++) {
+          if (memcmp(peers[i].macAddr, macAddr, 6) == 0) {
+            peerExists = true;
+            break;
+          }
+        }
+        
+        if (peerExists) {
+          ledError();
+          showStatus("Peer already\nexists!", 2000);
+          drawKeyboard();
+        } else {
+          addPeer(macAddr, "");
+          ledSuccess();
+          showStatus("Peer added!", 1500);
+          currentState = STATE_ESP_NOW_PEERS;
+          espnowPeerSelection = peerCount - 1;
+          showESPNowPeers();
+        }
+      } else {
+        ledError();
+        showStatus("Invalid MAC\nformat!", 2000);
+        drawKeyboard();
+      }
+    } else {
+      ledError();
+      showStatus("MAC incomplete!\n(need 17 chars)", 2000);
+      drawKeyboard();
+    }
+  } else if (strcmp(key, "<") == 0) {
+    if (mac.length() > 0) {
+      // Handle backspace - remove character and colon if needed
+      if (mac.endsWith(":")) {
+        userInput.remove(userInput.length() - 2, 2);
+      } else {
+        userInput.remove(userInput.length() - 1);
+      }
+      textInputScrollOffset = 0; // Reset scroll on backspace
+    }
+    drawKeyboard();
+  } else if (strcmp(key, "#") == 0) {
+    // Do nothing for MAC input - no mode toggle needed
+    drawKeyboard();
+  } else if (strcmp(key, " ") == 0) {
+    // Ignore space for MAC input
+    drawKeyboard();
+  } else {
+    // Only allow hex characters for MAC address
+    char c = key[0];
+    if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
+      if (mac.length() < 17) {
+        userInput += c;
+        
+        // Auto-add colons at appropriate positions
+        int len = userInput.length();
+        if (len == 2 || len == 5 || len == 8 || len == 11 || len == 14) {
+          userInput += ":";
+        }
+        
+        textInputScrollOffset = 0; // Reset scroll on new input
+      }
+    }
+    drawKeyboard();
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
   
-  Serial.println("\n=== ESP32-C3 Ultra Edition v4.0 ===");
+  Serial.println("\n=== ESP32-C3 Ultra Edition v4.1 (Bug Fixed) ===");
   Serial.println("Advanced Features Enabled");
   
   preferences.begin("wifi-creds", false);
@@ -370,7 +499,7 @@ void setup() {
   pinMode(BTN_LEFT, INPUT_PULLUP);
   pinMode(BTN_RIGHT, INPUT_PULLUP);
   pinMode(BTN_SELECT, INPUT_PULLUP);
-  pinMode(BTN_BACK, INPUT_PULLUP);  // NEW
+  pinMode(BTN_BACK, INPUT_PULLUP);
   
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
@@ -379,7 +508,12 @@ void setup() {
   pinMode(CHARGING_PIN, INPUT);
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
-  updateBatteryLevel();
+  
+  // FIXED: Initialize battery with multiple readings for stability
+  for (int i = 0; i < 5; i++) {
+    updateBatteryLevel();
+    delay(100);
+  }
   
   // Initialize battery history
   for (int i = 0; i < BATTERY_HISTORY_SIZE; i++) {
@@ -407,6 +541,7 @@ void setup() {
   
   // Initialize ESP-NOW
   initESPNow();
+  loadPeers();
   
   // Auto-connect WiFi
   String savedSSID = preferences.getString("ssid", "");
@@ -451,7 +586,6 @@ void loop() {
   if (zenModeActive) {
     ledZenMode();
     
-    // Update zen breath animation
     if (currentMillis % 4000 < 2000) {
       zenBreathPhase = map(currentMillis % 2000, 0, 2000, 0, 100);
     } else {
@@ -460,7 +594,6 @@ void loop() {
     
     showZenMode();
     
-    // Check for exit button
     if (digitalRead(BTN_BACK) == LOW || digitalRead(BTN_SELECT) == LOW) {
       delay(200);
       exitZenMode();
@@ -570,6 +703,50 @@ void loop() {
     }
   }
   
+  // NEW: Update keyboard text scrolling animation
+  if (currentState == STATE_KEYBOARD || currentState == STATE_PASSWORD_INPUT) {
+    int maxChars = 0;
+    String text = "";
+    
+    if (keyboardContext == CONTEXT_WIFI_PASSWORD) {
+      String masked = "";
+      for (unsigned int i = 0; i < passwordInput.length(); i++) {
+        masked += "*";
+      }
+      text = masked;
+      maxChars = 14;
+    } else if (keyboardContext == CONTEXT_ESPNOW_MAC) {
+      text = userInput;
+      maxChars = 13;
+    } else {
+      text = userInput;
+      maxChars = 17;
+    }
+    
+    if (text.length() > maxChars) {
+      if (currentMillis - lastTextInputUpdate > textInputScrollSpeed) {
+        drawKeyboard(); // Redraw to update scroll position
+      }
+    }
+  }
+
+  // Main Menu Animation Logic
+  if (currentState == STATE_MAIN_MENU) {
+    if (abs(menuScrollY - menuTargetScrollY) > 0.1) {
+      menuScrollY += (menuTargetScrollY - menuScrollY) * 0.3;
+      refreshCurrentScreen();
+    } else if (menuScrollY != menuTargetScrollY) {
+      menuScrollY = menuTargetScrollY;
+      refreshCurrentScreen();
+    }
+
+    int newSelection = round(menuScrollY / 22.0);
+    if (menuSelection != newSelection) {
+        menuSelection = newSelection;
+        lastMenuTextScrollTime = millis();
+    }
+  }
+  
   // Button handling
   if (currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
@@ -609,7 +786,7 @@ void loop() {
   }
 }
 
-// ========== ESP-NOW FUNCTIONS ==========
+// ========== ESP-NOW FUNCTIONS - FIXED ==========
 
 void initESPNow() {
   WiFi.mode(WIFI_AP_STA);
@@ -624,17 +801,14 @@ void initESPNow() {
   
   Serial.println("ESP-NOW initialized");
   
-  // Print MAC address
   uint8_t mac[6];
   WiFi.macAddress(mac);
   Serial.printf("MAC: %02X:%02X:%02X:%02X:%02X:%02X\n", 
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-// ESP-NOW callback untuk versi Arduino Core terbaru
 void onESPNowDataReceived(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   if (inboxCount >= MAX_MESSAGES) {
-    // Shift messages
     for (int i = 0; i < MAX_MESSAGES - 1; i++) {
       inbox[i] = inbox[i + 1];
     }
@@ -663,13 +837,28 @@ void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status) {
     showStatus("Send failed!", 1500);
   }
   
-  if (currentState == STATE_ESP_NOW_SEND) {
-    showESPNowSend();
+  if (currentState == STATE_ESP_NOW_SEND || currentState == STATE_KEYBOARD) {
+    currentState = STATE_ESP_NOW_MENU;
+    espnowMenuSelection = 0;
+    showESPNowMenu();
   }
 }
 
-void addPeer(uint8_t* macAddr) {
-  if (peerCount >= MAX_ESP_PEERS) return;
+void addPeer(uint8_t* macAddr, String name) {
+  if (peerCount >= MAX_ESP_PEERS) {
+    ledError();
+    showStatus("Peer list full!", 1500);
+    return;
+  }
+
+  // Check if peer already exists
+  for (int i = 0; i < peerCount; i++) {
+    if (memcmp(peers[i].macAddr, macAddr, 6) == 0) {
+      ledError();
+      showStatus("Peer already\nexists!", 1500);
+      return;
+    }
+  }
   
   esp_now_peer_info_t peerInfo = {};
   memcpy(peerInfo.peer_addr, macAddr, 6);
@@ -677,18 +866,94 @@ void addPeer(uint8_t* macAddr) {
   peerInfo.encrypt = false;
   
   if (esp_now_add_peer(&peerInfo) == ESP_OK) {
-    memcpy(peerAddresses[peerCount], macAddr, 6);
+    memcpy(peers[peerCount].macAddr, macAddr, 6);
+    peers[peerCount].name = name;
     peerCount++;
+    savePeers();
     ledSuccess();
+    Serial.println("Peer added successfully");
   } else {
     ledError();
+    Serial.println("Failed to add peer to ESP-NOW");
   }
 }
 
 void sendESPNowMessage(String message, uint8_t* targetMac) {
-  esp_now_send(targetMac, (uint8_t*)message.c_str(), message.length());
+  if (message.length() == 0) return;
+  
+  esp_err_t result = esp_now_send(targetMac, (uint8_t*)message.c_str(), message.length());
+  
+  if (result != ESP_OK) {
+    Serial.printf("Send error: %d\n", result);
+  }
 }
 
+void deletePeer(int index) {
+  if (index < 0 || index >= peerCount) return;
+
+  if (esp_now_del_peer(peers[index].macAddr) != ESP_OK) {
+    ledError();
+    showStatus("Failed to delete\nfrom ESP-NOW", 2000);
+    return;
+  }
+
+  for (int i = index; i < peerCount - 1; i++) {
+    peers[i] = peers[i + 1];
+  }
+  peerCount--;
+
+  savePeers();
+  ledSuccess();
+  
+  // FIXED: Better selection management after deletion
+  if (espnowPeerSelection >= peerCount && peerCount > 0) {
+    espnowPeerSelection = peerCount - 1;
+  } else if (peerCount == 0) {
+    espnowPeerSelection = 0;
+  }
+}
+
+void savePeers() {
+  preferences.begin("esp-now-peers", false);
+  preferences.putInt("peer_count", peerCount);
+  
+  for (int i = 0; i < peerCount; i++) {
+    String macKey = "peer_" + String(i) + "_mac";
+    String nameKey = "peer_" + String(i) + "_name";
+    preferences.putBytes(macKey.c_str(), peers[i].macAddr, 6);
+    preferences.putString(nameKey.c_str(), peers[i].name);
+  }
+  preferences.end();
+}
+
+void loadPeers() {
+  preferences.begin("esp-now-peers", true);
+  peerCount = preferences.getInt("peer_count", 0);
+  peerCount = min(peerCount, MAX_ESP_PEERS);
+  
+  for (int i = 0; i < peerCount; i++) {
+    String macKey = "peer_" + String(i) + "_mac";
+    String nameKey = "peer_" + String(i) + "_name";
+    preferences.getBytes(macKey.c_str(), peers[i].macAddr, 6);
+    peers[i].name = preferences.getString(nameKey.c_str(), "");
+
+    // Re-register peer with ESP-NOW
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, peers[i].macAddr, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    
+    if (esp_now_is_peer_exist(peers[i].macAddr)) {
+        esp_now_del_peer(peers[i].macAddr);
+    }
+    esp_now_add_peer(&peerInfo);
+  }
+  preferences.end();
+  
+  Serial.printf("Loaded %d peers\n", peerCount);
+}
+
+// FIXED: ESP-NOW Menu dengan selection yang jelas
 void showESPNowMenu() {
   display.clearDisplay();
   drawBatteryIndicator();
@@ -702,33 +967,80 @@ void showESPNowMenu() {
   
   const char* menuItems[] = {
     "Send Message",
-    "Inbox (",
+    "Inbox",
     "Manage Peers",
     "Back"
   };
   
   for (int i = 0; i < 4; i++) {
     display.setCursor(10, 26 + i * 10);
-    if (i == menuSelection) {
+    if (i == espnowMenuSelection) {
       display.print("> ");
     } else {
       display.print("  ");
     }
     
-    if (i == 1) {
-      display.print(menuItems[i]);
+    display.print(menuItems[i]);
+    
+    if (i == 1) {  // Inbox
+      display.print(" (");
       display.print(inboxCount);
       display.print(")");
-    } else {
-      display.print(menuItems[i]);
     }
   }
   
-  // Show peer count
   display.setCursor(85, 56);
   display.print("Peers:");
   display.print(peerCount);
   
+  display.display();
+}
+
+// FIXED: Peer Options Menu yang lebih jelas
+void showESPNowPeerOptions() {
+  display.clearDisplay();
+  drawBatteryIndicator();
+  drawBreadcrumb();
+
+  display.setTextSize(1);
+  display.setCursor(20, 2);
+  display.print("PEER OPTIONS");
+
+  display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
+
+  // Show peer info
+  display.setCursor(2, 15);
+  if (peers[espnowPeerSelection].name.length() > 0) {
+    String name = peers[espnowPeerSelection].name;
+    if (name.length() > 20) {
+      name = name.substring(0, 20);
+    }
+    display.print(name);
+  } else {
+    display.print("Unnamed Peer");
+  }
+  
+  display.setCursor(2, 24);
+  display.printf("%02X:%02X:%02X:%02X:%02X:%02X",
+                peers[espnowPeerSelection].macAddr[0], 
+                peers[espnowPeerSelection].macAddr[1],
+                peers[espnowPeerSelection].macAddr[2], 
+                peers[espnowPeerSelection].macAddr[3],
+                peers[espnowPeerSelection].macAddr[4], 
+                peers[espnowPeerSelection].macAddr[5]);
+
+  const char* menuItems[] = {"Rename", "Delete", "Back"};
+  for (int i = 0; i < 3; i++) {
+    int y = 36 + i * 10;
+    display.setCursor(5, y);
+    if (i == espnowPeerOptionsSelection) {
+      display.print("> ");
+    } else {
+      display.print("  ");
+    }
+    display.print(menuItems[i]);
+  }
+
   display.display();
 }
 
@@ -752,18 +1064,34 @@ void showESPNowSend() {
     display.setCursor(5, 15);
     display.print("Select peer:");
     
-    for (int i = 0; i < min(peerCount, 3); i++) {
-      display.setCursor(10, 28 + i * 10);
-      if (i == selectedPeer) {
-        display.print("> ");
+    int startIdx = max(0, espnowPeerSelection - 1);
+    int endIdx = min(peerCount, startIdx + 3);
+    
+    for (int i = startIdx; i < endIdx; i++) {
+      int y = 28 + (i - startIdx) * 10;
+      
+      if (i == espnowPeerSelection) {
+        display.fillRect(0, y - 1, SCREEN_WIDTH, 10, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
       } else {
-        display.print("  ");
+        display.setTextColor(SSD1306_WHITE);
       }
       
-      display.printf("%02X:%02X:%02X:%02X:%02X:%02X",
-                    peerAddresses[i][0], peerAddresses[i][1], 
-                    peerAddresses[i][2], peerAddresses[i][3],
-                    peerAddresses[i][4], peerAddresses[i][5]);
+      display.setCursor(5, y);
+      
+      if (peers[i].name.length() > 0) {
+        String name = peers[i].name;
+        if (name.length() > 18) {
+          name = name.substring(0, 18);
+        }
+        display.print(name);
+      } else {
+        display.printf("%02X:%02X:%02X:%02X",
+                      peers[i].macAddr[0], peers[i].macAddr[1],
+                      peers[i].macAddr[2], peers[i].macAddr[3]);
+      }
+      
+      display.setTextColor(SSD1306_WHITE);
     }
   }
   
@@ -787,13 +1115,13 @@ void showESPNowInbox() {
     display.setCursor(25, 30);
     display.print("No messages");
   } else {
-    int startIdx = max(0, menuSelection);
+    int startIdx = max(0, espnowInboxSelection - 1);
     int endIdx = min(inboxCount, startIdx + 4);
     
     for (int i = startIdx; i < endIdx; i++) {
       int y = 15 + (i - startIdx) * 12;
       
-      if (i == menuSelection) {
+      if (i == espnowInboxSelection) {
         display.fillRect(0, y, SCREEN_WIDTH, 11, SSD1306_WHITE);
         display.setTextColor(SSD1306_BLACK);
       } else {
@@ -820,39 +1148,61 @@ void showESPNowInbox() {
   display.display();
 }
 
+// FIXED: Peer management dengan navigasi yang lebih baik
 void showESPNowPeers() {
   display.clearDisplay();
   drawBatteryIndicator();
   drawBreadcrumb();
-  
+
   display.setTextSize(1);
   display.setCursor(20, 2);
   display.print("MANAGE PEERS");
-  
+
   display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
-  
-  display.setCursor(5, 15);
-  display.print("Peers: ");
-  display.print(peerCount);
-  display.print("/");
-  display.print(MAX_ESP_PEERS);
-  
+
   if (peerCount == 0) {
-    display.setCursor(5, 30);
-    display.print("Add peer MAC addr");
-    display.setCursor(5, 40);
-    display.print("via Serial console");
+    display.setCursor(30, 25);
+    display.print("No peers");
+    display.setCursor(20, 36);
+    display.print("Press SELECT");
+    display.setCursor(25, 45);
+    display.print("to add peer");
   } else {
-    for (int i = 0; i < min(peerCount, 3); i++) {
-      display.setCursor(5, 28 + i * 10);
-      display.printf("%d. %02X:%02X:%02X:%02X:%02X:%02X",
-                    i + 1,
-                    peerAddresses[i][0], peerAddresses[i][1],
-                    peerAddresses[i][2], peerAddresses[i][3],
-                    peerAddresses[i][4], peerAddresses[i][5]);
+    // Display peers with scrolling
+    int startIdx = max(0, espnowPeerSelection - 2);
+    int endIdx = min(peerCount, startIdx + 4);
+    
+    for (int i = startIdx; i < endIdx; i++) {
+      int y = 15 + (i - startIdx) * 10;
+      
+      if (i == espnowPeerSelection) {
+        display.fillRect(0, y, SCREEN_WIDTH, 9, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+      } else {
+        display.setTextColor(SSD1306_WHITE);
+      }
+      
+      display.setCursor(2, y + 1);
+      if (peers[i].name.length() > 0) {
+        String name = peers[i].name;
+        if (name.length() > 18) {
+          name = name.substring(0, 18);
+        }
+        display.print(name);
+      } else {
+        display.printf("%02X:%02X:%02X:%02X:%02X:%02X",
+                      peers[i].macAddr[0], peers[i].macAddr[1],
+                      peers[i].macAddr[2], peers[i].macAddr[3],
+                      peers[i].macAddr[4], peers[i].macAddr[5]);
+      }
+      display.setTextColor(SSD1306_WHITE);
     }
   }
-  
+
+  // Show controls at bottom
+  display.setCursor(2, 56);
+  display.print("SEL:Options ADD:Back");
+
   display.display();
 }
 
@@ -872,26 +1222,23 @@ void checkBatteryHealth() {
   int dataPoints = batteryHistoryFilled ? BATTERY_HISTORY_SIZE : batteryHistoryIndex;
   if (dataPoints < 5) return;
   
-  // Calculate drain rate (% per minute)
   int oldIdx = batteryHistoryFilled ? batteryHistoryIndex : 0;
   int recentIdx = batteryHistoryFilled ? 
                   (batteryHistoryIndex - 1 + BATTERY_HISTORY_SIZE) % BATTERY_HISTORY_SIZE :
                   batteryHistoryIndex - 1;
   
   int batteryDiff = batteryHistory[oldIdx] - batteryHistory[recentIdx];
-  unsigned long timeDiff = (batteryTimestamps[recentIdx] - batteryTimestamps[oldIdx]) / 60000; // minutes
+  unsigned long timeDiff = (batteryTimestamps[recentIdx] - batteryTimestamps[oldIdx]) / 60000;
   
   if (timeDiff > 0) {
     batteryDrainRate = (float)batteryDiff / timeDiff;
     
-    // Check for battery leak (>2% per minute)
     if (batteryDrainRate > 2.0 && !isCharging) {
       batteryLeakWarning = true;
     } else {
       batteryLeakWarning = false;
     }
     
-    // Estimate time left
     if (batteryDrainRate > 0 && !isCharging) {
       estimatedMinutesLeft = (int)(batteryPercent / batteryDrainRate);
     } else if (isCharging && batteryDrainRate < 0) {
@@ -915,7 +1262,6 @@ void showBatteryGuardian() {
   
   display.drawLine(0, 22, SCREEN_WIDTH, 22, SSD1306_WHITE);
   
-  // Battery status
   display.setCursor(2, 26);
   display.print("Level: ");
   display.print(batteryPercent);
@@ -923,7 +1269,6 @@ void showBatteryGuardian() {
   display.print(batteryVoltage, 2);
   display.print("V)");
   
-  // Drain rate
   display.setCursor(2, 36);
   display.print("Drain: ");
   if (isCharging) {
@@ -935,7 +1280,6 @@ void showBatteryGuardian() {
     display.print("%/min");
   }
   
-  // Time estimate
   display.setCursor(2, 46);
   if (estimatedMinutesLeft > 0) {
     if (isCharging) {
@@ -957,7 +1301,6 @@ void showBatteryGuardian() {
     display.print("Time: Calculating...");
   }
   
-  // Warning
   if (batteryLeakWarning) {
     if ((millis() / 500) % 2 == 0) {
       display.fillRect(0, 56, SCREEN_WIDTH, 8, SSD1306_WHITE);
@@ -974,22 +1317,16 @@ void showBatteryGuardian() {
 // ========== POWER CONSUMPTION MONITOR ==========
 
 void updatePowerConsumption() {
-  // WiFi power estimation
   if (WiFi.status() == WL_CONNECTED) {
-    wifiPowerDraw = 80; // ~80mA when connected
+    wifiPowerDraw = 80;
   } else if (WiFi.getMode() != WIFI_OFF) {
-    wifiPowerDraw = 120; // ~120mA when scanning
+    wifiPowerDraw = 120;
   } else {
     wifiPowerDraw = 0;
   }
   
-  // Display power (always on in this code)
-  displayPowerDraw = 20; // ~20mA for OLED
-  
-  // CPU power based on frequency
-  cpuPowerDraw = map(cpuFreq, 80, 160, 30, 60); // 30-60mA
-  
-  // Total power draw in mA
+  displayPowerDraw = 20;
+  cpuPowerDraw = map(cpuFreq, 80, 160, 30, 60);
   totalPowerDraw = wifiPowerDraw + displayPowerDraw + cpuPowerDraw;
 }
 
@@ -1004,7 +1341,6 @@ void showPowerConsumption() {
   
   display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
   
-  // Component breakdown
   display.setCursor(2, 15);
   display.print("WiFi:");
   display.setCursor(70, 15);
@@ -1031,17 +1367,18 @@ void showPowerConsumption() {
   display.print(totalPowerDraw, 0);
   display.print(" mA");
   
-  // Power bar graph
   int graphY = 56;
   int graphW = 126;
   
-  int wifiBar = map(wifiPowerDraw, 0, totalPowerDraw, 0, graphW);
-  int displayBar = map(displayPowerDraw, 0, totalPowerDraw, 0, graphW);
-  int cpuBar = map(cpuPowerDraw, 0, totalPowerDraw, 0, graphW);
-  
-  display.fillRect(1, graphY, wifiBar, 3, SSD1306_WHITE);
-  display.fillRect(1, graphY + 3, displayBar, 2, SSD1306_WHITE);
-  display.fillRect(1, graphY + 5, cpuBar, 2, SSD1306_WHITE);
+  if (totalPowerDraw > 0) {
+    int wifiBar = map(wifiPowerDraw, 0, totalPowerDraw, 0, graphW);
+    int displayBar = map(displayPowerDraw, 0, totalPowerDraw, 0, graphW);
+    int cpuBar = map(cpuPowerDraw, 0, totalPowerDraw, 0, graphW);
+    
+    display.fillRect(1, graphY, wifiBar, 3, SSD1306_WHITE);
+    display.fillRect(1, graphY + 3, displayBar, 2, SSD1306_WHITE);
+    display.fillRect(1, graphY + 5, cpuBar, 2, SSD1306_WHITE);
+  }
   
   display.display();
 }
@@ -1052,7 +1389,6 @@ void enterZenMode() {
   zenModeActive = true;
   zenModeStartTime = millis();
   
-  // Disconnect WiFi
   WiFi.disconnect();
   WiFi.mode(WIFI_OFF);
   
@@ -1070,12 +1406,10 @@ void exitZenMode() {
 void showZenMode() {
   display.clearDisplay();
   
-  // Calculate time in zen mode
-  unsigned long zenDuration = (millis() - zenModeStartTime) / 1000; // seconds
+  unsigned long zenDuration = (millis() - zenModeStartTime) / 1000;
   int zenMinutes = zenDuration / 60;
   int zenSeconds = zenDuration % 60;
   
-  // Minimal clock
   display.setTextSize(2);
   String timeStr = "";
   if (zenMinutes < 10) timeStr += "0";
@@ -1088,7 +1422,6 @@ void showZenMode() {
   display.setCursor((SCREEN_WIDTH - textW) / 2, 15);
   display.print(timeStr);
   
-  // Breathing circle animation
   display.setTextSize(1);
   int centerX = SCREEN_WIDTH / 2;
   int centerY = 45;
@@ -1100,12 +1433,10 @@ void showZenMode() {
     display.drawCircle(centerX, centerY, breathRadius - 2, SSD1306_WHITE);
   }
   
-  // Battery indicator (minimal)
   display.setCursor(2, 2);
   display.print(batteryPercent);
   display.print("%");
   
-  // Zen message
   display.setCursor(25, 58);
   display.print("Breathe...");
   
@@ -1127,7 +1458,6 @@ void showDeveloperMode() {
   
   display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
   
-  // Real-time debugging info
   display.setCursor(2, 14);
   display.print("Heap: ");
   display.print(freeHeap / 1024);
@@ -1161,7 +1491,6 @@ void showDeveloperMode() {
   display.print(batteryDrainRate, 2);
   display.print("%/m");
   
-  // Status bar
   if (lowMemoryWarning && (millis() / 500) % 2 == 0) {
     display.fillRect(0, 58, SCREEN_WIDTH, 6, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
@@ -1201,7 +1530,6 @@ void showDisplaySettings() {
     }
     display.print(menuItems[i]);
     
-    // Show current values
     if (i == 0) {
       display.setCursor(90, 20 + i * 12);
       display.print("[");
@@ -1215,7 +1543,6 @@ void showDisplaySettings() {
     }
   }
   
-  // Preview
   display.setCursor(5, 50);
   display.print("Preview:");
   display.setTextSize(fontSize);
@@ -1225,19 +1552,16 @@ void showDisplaySettings() {
   display.display();
 }
 
-// ========== SYSTEM INFO WITH CPU TEMP ==========
+// ========== SYSTEM INFO ==========
 
 void updateSystemStats() {
   freeHeap = ESP.getFreeHeap();
   totalHeap = ESP.getHeapSize();
   minFreeHeap = ESP.getMinFreeHeap();
   cpuFreq = ESP.getCpuFreqMHz();
-  
-  // Read CPU temperature
   cpuTemp = temperatureRead();
   
-  // Check for low memory
-  if (freeHeap < 20000) { // Less than 20KB
+  if (freeHeap < 20000) {
     lowMemoryWarning = true;
   } else {
     lowMemoryWarning = false;
@@ -1255,7 +1579,6 @@ void showSystemInfo() {
   
   display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
   
-  // Memory info
   display.setCursor(2, 15);
   display.print("Free Heap:");
   display.setCursor(70, 15);
@@ -1273,27 +1596,23 @@ void showSystemInfo() {
   display.print(totalHeap / 1024);
   display.print(" KB");
   
-  // CPU info
   display.setCursor(2, 33);
   display.print("CPU Freq:");
   display.setCursor(70, 33);
   display.print((int)cpuFreq);
   display.print(" MHz");
   
-  // CPU Temperature
   display.setCursor(2, 42);
   display.print("CPU Temp:");
   display.setCursor(70, 42);
   display.print(cpuTemp, 1);
   display.print(" C");
   
-  // Loop rate
   display.setCursor(2, 51);
   display.print("Loop/sec:");
   display.setCursor(70, 51);
   display.print(lastLoopCount);
   
-  // Health warning
   if (lowMemoryWarning && (millis() / 500) % 2 == 0) {
     display.fillRect(0, 58, SCREEN_WIDTH, 6, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
@@ -1344,7 +1663,6 @@ void showSettingsMenu() {
     }
     display.print(menuItems[i]);
     
-    // Show status
     if (i == 0) {
       display.setCursor(95, y);
       display.print(wifiAutoOffEnabled ? "[ON]" : "[OFF]");
@@ -1359,7 +1677,7 @@ void showSettingsMenu() {
 
 void handleSettingsMenuSelect() {
   switch(settingsMenuSelection) {
-    case 0: // Toggle WiFi Auto-Off
+    case 0:
       wifiAutoOffEnabled = !wifiAutoOffEnabled;
       preferences.putBool("wifiAutoOff", wifiAutoOffEnabled);
       ledSuccess();
@@ -1371,18 +1689,18 @@ void handleSettingsMenuSelect() {
       }
       showSettingsMenu();
       break;
-    case 1: // Display Settings
+    case 1:
       previousState = currentState;
       currentState = STATE_DISPLAY_SETTINGS;
       menuSelection = 0;
       showDisplaySettings();
       break;
-    case 2: // System Info
+    case 2:
       previousState = currentState;
       currentState = STATE_SYSTEM_INFO;
       showSystemInfo();
       break;
-    case 3: // Toggle Developer Mode
+    case 3:
       devModeEnabled = !devModeEnabled;
       preferences.putBool("devMode", devModeEnabled);
       ledSuccess();
@@ -1395,18 +1713,19 @@ void handleSettingsMenuSelect() {
         showSettingsMenu();
       }
       break;
-    case 4: // Zen Mode
+    case 4:
       enterZenMode();
       break;
-    case 5: // Back
+    case 5:
       currentState = STATE_MAIN_MENU;
-      menuSelection = 0;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
       showMainMenu();
       break;
   }
 }
 
-// ========== BREADCRUMB NAVIGATION ==========
+// ========== BREADCRUMB & ICONS ==========
 
 void drawBreadcrumb() {
   String crumb = "";
@@ -1444,6 +1763,7 @@ void drawBreadcrumb() {
     case STATE_ESP_NOW_SEND:
     case STATE_ESP_NOW_INBOX:
     case STATE_ESP_NOW_PEERS:
+    case STATE_ESP_NOW_PEER_OPTIONS:
       crumb = "Main > ESP-NOW";
       break;
     case STATE_CHAT_RESPONSE:
@@ -1454,14 +1774,7 @@ void drawBreadcrumb() {
     default:
       crumb = "";
   }
-  
-  if (crumb.length() > 0 && currentState != STATE_MAIN_MENU) {
-    // Draw breadcrumb at top
-    // (Will be drawn by individual screens)
-  }
 }
-
-// ========== ICON DRAWING ==========
 
 void drawIcon(int x, int y, const unsigned char* icon) {
   for (int i = 0; i < 8; i++) {
@@ -1474,7 +1787,7 @@ void drawIcon(int x, int y, const unsigned char* icon) {
   }
 }
 
-// ========== MAIN MENU WITH ICONS ==========
+// ========== MAIN MENU ==========
 
 void showMainMenu() {
   display.clearDisplay();
@@ -1483,8 +1796,6 @@ void showMainMenu() {
   if (WiFi.status() == WL_CONNECTED) {
     drawWiFiSignalBars();
   }
-  
-  display.setTextSize(1);
   
   struct MenuItem {
     const char* text;
@@ -1501,28 +1812,52 @@ void showMainMenu() {
     {"Settings", ICON_SETTINGS}
   };
   
-  int startY = 10;
-  int visibleItems = 5;
-  int startIdx = max(0, menuSelection - 2);
-  int endIdx = min(7, startIdx + visibleItems);
+  int numItems = sizeof(menuItems) / sizeof(MenuItem);
+  int screenCenterY = SCREEN_HEIGHT / 2;
   
-  for (int i = startIdx; i < endIdx; i++) {
-    int y = startY + (i - startIdx) * 10;
+  for (int i = 0; i < numItems; i++) {
+    float itemY = screenCenterY + (i * 22) - menuScrollY;
+    float distance = abs(itemY - screenCenterY);
     
-    // Draw icon
-    drawIcon(2, y, menuItems[i].icon);
-    
-    display.setCursor(14, y + 1);
-    if (i == menuSelection) {
-      display.print("> ");
-    } else {
-      display.print("  ");
-    }
-    display.print(menuItems[i].text);
-    
-    // Selection indicator
-    if (i == menuSelection && (millis() / 200) % 2 == 0) {
-      display.fillRect(SCREEN_WIDTH - 6, y, 4, 8, SSD1306_WHITE);
+    if (itemY > -20 && itemY < SCREEN_HEIGHT + 20) {
+      if (i == menuSelection) {
+        display.drawRoundRect(2, screenCenterY - 11, SCREEN_WIDTH - 4, 22, 5, SSD1306_WHITE);
+        drawIcon(8, screenCenterY - 4, menuItems[i].icon);
+
+        display.setTextSize(2);
+        display.setTextWrap(false);
+
+        int16_t x1, y1;
+        uint16_t w, h;
+        display.getTextBounds(menuItems[i].text, 0, 0, &x1, &y1, &w, &h);
+
+        if (w > SCREEN_WIDTH - 30) {
+            if (millis() - lastMenuTextScrollTime > 15) {
+                menuTextScrollX--;
+                if (menuTextScrollX <= -(w + 10)) {
+                    menuTextScrollX += (w + 10);
+                }
+                lastMenuTextScrollTime = millis();
+            }
+            display.setCursor(22 + menuTextScrollX, screenCenterY - 6);
+            display.print(menuItems[i].text);
+            display.setCursor(22 + menuTextScrollX + w + 10, screenCenterY - 6);
+            display.print(menuItems[i].text);
+        } else {
+            display.setCursor(22, screenCenterY - 6);
+            display.print(menuItems[i].text);
+        }
+
+        display.setTextWrap(true);
+      } else {
+        display.setTextSize(1);
+        int textX = 22 + (distance / 2);
+        if (textX > SCREEN_WIDTH / 2) textX = SCREEN_WIDTH / 2;
+
+        display.setCursor(textX, itemY - 3);
+        display.print(menuItems[i].text);
+        drawIcon(textX - 14, itemY - 4, menuItems[i].icon);
+      }
     }
   }
   
@@ -1530,7 +1865,8 @@ void showMainMenu() {
 }
 
 void handleMainMenuSelect() {
-  switch(menuSelection) {
+  mainMenuSelection = menuSelection;
+  switch(mainMenuSelection) {
     case 0: // Chat AI
       if (WiFi.status() == WL_CONNECTED) {
         menuSelection = 0;
@@ -1569,7 +1905,7 @@ void handleMainMenuSelect() {
       showBatteryGuardian();
       break;
     case 5: // ESP-NOW
-      menuSelection = 0;
+      espnowMenuSelection = 0;
       previousState = currentState;
       currentState = STATE_ESP_NOW_MENU;
       showESPNowMenu();
@@ -1583,14 +1919,13 @@ void handleMainMenuSelect() {
   }
 }
 
-// ========== BACK BUTTON HANDLER ==========
+// ========== BACK BUTTON HANDLER - FIXED ==========
 
 void handleBackButton() {
   ledQuickFlash();
   
   switch(currentState) {
     case STATE_MAIN_MENU:
-      // Already at main, do nothing
       break;
       
     case STATE_WIFI_MENU:
@@ -1598,9 +1933,16 @@ void handleBackButton() {
     case STATE_POWER_BASE:
     case STATE_SETTINGS_MENU:
     case STATE_BATTERY_GUARDIAN:
+      currentState = STATE_MAIN_MENU;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
+      showMainMenu();
+      break;
+      
     case STATE_ESP_NOW_MENU:
       currentState = STATE_MAIN_MENU;
-      menuSelection = 0;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
       showMainMenu();
       break;
       
@@ -1632,15 +1974,42 @@ void handleBackButton() {
     case STATE_ESP_NOW_INBOX:
     case STATE_ESP_NOW_PEERS:
       currentState = STATE_ESP_NOW_MENU;
-      menuSelection = 0;
+      espnowMenuSelection = 0;
       showESPNowMenu();
       break;
       
+    case STATE_ESP_NOW_PEER_OPTIONS:
+      currentState = STATE_ESP_NOW_PEERS;
+      showESPNowPeers();
+      break;
+
     case STATE_KEYBOARD:
+      // FIXED: Better context-aware back handling
+      if (keyboardContext == CONTEXT_ESPNOW_MESSAGE) {
+        currentState = STATE_ESP_NOW_MENU;
+        espnowMenuSelection = 0;
+        showESPNowMenu();
+      } else if (keyboardContext == CONTEXT_ESPNOW_PEER_NAME) {
+        currentState = STATE_ESP_NOW_PEER_OPTIONS;
+        showESPNowPeerOptions();
+      } else if (keyboardContext == CONTEXT_ESPNOW_MAC) {
+        currentState = STATE_ESP_NOW_PEERS;
+        showESPNowPeers();
+      } else {
+        currentState = STATE_MAIN_MENU;
+        menuSelection = mainMenuSelection;
+        menuTargetScrollY = mainMenuSelection * 22;
+        userInput = "";
+        aiResponse = "";
+        showMainMenu();
+      }
+      break;
+      
     case STATE_API_SELECT:
     case STATE_CHAT_RESPONSE:
       currentState = STATE_MAIN_MENU;
-      menuSelection = 0;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
       userInput = "";
       aiResponse = "";
       showMainMenu();
@@ -1654,7 +2023,7 @@ void handleBackButton() {
   }
 }
 
-// ========== CONTINUATION OF EXISTING FUNCTIONS ==========
+// ========== POWER FUNCTIONS ==========
 
 void showPowerBase() {
   display.clearDisplay();
@@ -1712,7 +2081,8 @@ void handlePowerBaseSelect() {
       break;
     case 4:
       currentState = STATE_MAIN_MENU;
-      menuSelection = 0;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
       showMainMenu();
       break;
   }
@@ -1862,6 +2232,8 @@ void showPowerGraph() {
   display.display();
 }
 
+// ========== WIFI FUNCTIONS ==========
+
 void showWiFiMenu() {
   display.clearDisplay();
   drawBatteryIndicator();
@@ -1913,7 +2285,8 @@ void handleWiFiMenuSelect() {
       break;
     case 2:
       currentState = STATE_MAIN_MENU;
-      menuSelection = 0;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
       showMainMenu();
       break;
   }
@@ -2013,7 +2386,6 @@ void displayWiFiNetworks() {
       display.setTextColor(SSD1306_WHITE);
     }
     
-    // Page indicator
     if (networkCount > wifiPerPage) {
       display.setCursor(45, 56);
       display.print("Pg ");
@@ -2025,6 +2397,8 @@ void displayWiFiNetworks() {
   
   display.display();
 }
+
+// ========== CALCULATOR ==========
 
 void showCalculator() {
   display.clearDisplay();
@@ -2155,6 +2529,8 @@ void resetCalculator() {
   calcNewNumber = true;
 }
 
+// ========== API SELECT ==========
+
 void showAPISelect() {
   display.clearDisplay();
   drawBatteryIndicator();
@@ -2205,6 +2581,7 @@ void handleAPISelectSelect() {
   ledSuccess();
   
   userInput = "";
+  keyboardContext = CONTEXT_CHAT;
   currentState = STATE_KEYBOARD;
   cursorX = 0;
   cursorY = 0;
@@ -2212,35 +2589,103 @@ void handleAPISelectSelect() {
   drawKeyboard();
 }
 
+// ========== KEYBOARD FUNCTIONS ==========
+
 void drawKeyboard() {
   display.clearDisplay();
   drawBatteryIndicator();
   
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
   
-  if (currentState == STATE_PASSWORD_INPUT) {
+  // NEW: Calculate text display with scrolling
+  String displayText = "";
+  int maxVisibleChars = 0;
+  int prefixWidth = 0;
+  
+  if (keyboardContext == CONTEXT_WIFI_PASSWORD) {
+    display.setCursor(0, 0);
     display.print("Pass:");
+    prefixWidth = 30; // Width of "Pass:"
+    maxVisibleChars = (SCREEN_WIDTH - prefixWidth - 18) / 6; // Reserve space for mode indicator
+    
     String masked = "";
     for (unsigned int i = 0; i < passwordInput.length(); i++) {
       masked += "*";
     }
-    String displayText = masked.substring(max(0, (int)masked.length() - 10));
-    display.print(displayText);
+    displayText = masked;
+    
+  } else if (keyboardContext == CONTEXT_ESPNOW_MAC) {
+    display.setCursor(0, 0);
+    display.print("MAC:");
+    prefixWidth = 24; // Width of "MAC:"
+    maxVisibleChars = (SCREEN_WIDTH - prefixWidth - 30) / 6; // Reserve space for "HEX"
+    displayText = userInput;
+    
   } else {
+    display.setCursor(0, 0);
     display.print(">");
-    String displayText = userInput.substring(max(0, (int)userInput.length() - 14));
+    prefixWidth = 6; // Width of ">"
+    maxVisibleChars = (SCREEN_WIDTH - prefixWidth - 18) / 6;
+    displayText = userInput;
+  }
+  
+  // NEW: Smooth scrolling effect
+  int textLength = displayText.length();
+  
+  if (textLength > maxVisibleChars) {
+    // Text is too long, needs scrolling
+    unsigned long currentMillis = millis();
+    
+    if (currentMillis - lastTextInputUpdate > textInputScrollSpeed) {
+      textInputScrollOffset++;
+      
+      // Reset scroll when we've scrolled past the end
+      if (textInputScrollOffset > textLength - maxVisibleChars + 3) {
+        textInputScrollOffset = 0;
+        delay(500); // Pause at the beginning
+      }
+      
+      lastTextInputUpdate = currentMillis;
+    }
+    
+    // Extract visible portion
+    int startIdx = min(textInputScrollOffset, textLength - maxVisibleChars);
+    String visibleText = displayText.substring(startIdx, startIdx + maxVisibleChars);
+    
+    display.setCursor(prefixWidth, 0);
+    display.print(visibleText);
+    
+    // Show scroll indicator
+    if (startIdx > 0) {
+      display.setCursor(prefixWidth - 6, 0);
+      display.print("<");
+    }
+    if (startIdx + maxVisibleChars < textLength) {
+      display.setCursor(SCREEN_WIDTH - 24, 0);
+      display.print(">");
+    }
+    
+  } else {
+    // Text fits, no scrolling needed
+    textInputScrollOffset = 0;
+    display.setCursor(prefixWidth, 0);
     display.print(displayText);
   }
   
-  display.setCursor(SCREEN_WIDTH - 18, 0);
-  if (currentKeyboardMode == MODE_UPPER) {
-    display.print("A");
-  } else if (currentKeyboardMode == MODE_NUMBERS) {
-    display.print("#");
+  // Show keyboard mode indicator
+  if (keyboardContext != CONTEXT_ESPNOW_MAC) {
+    display.setCursor(SCREEN_WIDTH - 18, 0);
+    if (currentKeyboardMode == MODE_UPPER) {
+      display.print("A");
+    } else if (currentKeyboardMode == MODE_NUMBERS) {
+      display.print("#");
+    } else {
+      display.print("a");
+    }
   } else {
-    display.print("a");
+    display.setCursor(SCREEN_WIDTH - 30, 0);
+    display.print("HEX");
   }
   
   display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
@@ -2248,16 +2693,24 @@ void drawKeyboard() {
   int startY = 14;
   const char* currentKeyboard[3][10];
   
-  switch(currentKeyboardMode) {
-    case MODE_LOWER:
-      memcpy(currentKeyboard, keyboardLower, sizeof(keyboardLower));
-      break;
-    case MODE_UPPER:
-      memcpy(currentKeyboard, keyboardUpper, sizeof(keyboardUpper));
-      break;
-    case MODE_NUMBERS:
-      memcpy(currentKeyboard, keyboardNumbers, sizeof(keyboardNumbers));
-      break;
+  // Use MAC keyboard for MAC input
+  if (keyboardContext == CONTEXT_ESPNOW_MAC) {
+    memcpy(currentKeyboard, keyboardMac, sizeof(keyboardMac));
+  } else {
+    switch(currentKeyboardMode) {
+      case MODE_LOWER:
+        memcpy(currentKeyboard, keyboardLower, sizeof(keyboardLower));
+        break;
+      case MODE_UPPER:
+        memcpy(currentKeyboard, keyboardUpper, sizeof(keyboardUpper));
+        break;
+      case MODE_NUMBERS:
+        memcpy(currentKeyboard, keyboardNumbers, sizeof(keyboardNumbers));
+        break;
+      default:
+        memcpy(currentKeyboard, keyboardLower, sizeof(keyboardLower));
+        break;
+    }
   }
   
   for (int row = 0; row < 3; row++) {
@@ -2294,6 +2747,10 @@ void drawKeyboard() {
 }
 
 const char* getCurrentKey() {
+  if (keyboardContext == CONTEXT_ESPNOW_MAC) {
+    return keyboardMac[cursorY][cursorX];
+  }
+  
   switch(currentKeyboardMode) {
     case MODE_LOWER:
       return keyboardLower[cursorY][cursorX];
@@ -2330,6 +2787,7 @@ void handleKeyPress() {
   } else if (strcmp(key, "<") == 0) {
     if (userInput.length() > 0) {
       userInput.remove(userInput.length() - 1);
+      textInputScrollOffset = 0; // Reset scroll on backspace
     }
     drawKeyboard();
   } else if (strcmp(key, "#") == 0) {
@@ -2337,6 +2795,7 @@ void handleKeyPress() {
     drawKeyboard();
   } else {
     userInput += key;
+    textInputScrollOffset = 0; // Reset scroll on new input
     if (currentKeyboardMode == MODE_UPPER) {
       currentKeyboardMode = MODE_LOWER;
     }
@@ -2354,6 +2813,7 @@ void handlePasswordKeyPress() {
   } else if (strcmp(key, "<") == 0) {
     if (passwordInput.length() > 0) {
       passwordInput.remove(passwordInput.length() - 1);
+      textInputScrollOffset = 0; // Reset scroll on backspace
     }
     drawKeyboard();
   } else if (strcmp(key, "#") == 0) {
@@ -2361,12 +2821,15 @@ void handlePasswordKeyPress() {
     drawKeyboard();
   } else {
     passwordInput += key;
+    textInputScrollOffset = 0; // Reset scroll on new input
     if (currentKeyboardMode == MODE_UPPER) {
       currentKeyboardMode = MODE_LOWER;
     }
     drawKeyboard();
   }
 }
+
+// ========== WIFI & GEMINI FUNCTIONS ==========
 
 void connectToWiFi(String ssid, String password) {
   showProgressBar("Connecting", 0);
@@ -2440,6 +2903,16 @@ void sendToGemini() {
     return;
   }
   
+  // FIXED: Check free heap before JSON operations
+  if (freeHeap < 30000) {
+    ledError();
+    aiResponse = "Low memory! Cannot process request.";
+    currentState = STATE_CHAT_RESPONSE;
+    scrollOffset = 0;
+    displayResponse();
+    return;
+  }
+  
   const char* currentApiKey = (selectedAPIKey == 1) ? geminiApiKey1 : geminiApiKey2;
   
   HTTPClient http;
@@ -2461,7 +2934,8 @@ void sendToGemini() {
   if (httpResponseCode == 200) {
     String response = http.getString();
     
-    StaticJsonDocument<16384> responseDoc;
+    // FIXED: Use DynamicJsonDocument with proper size
+    DynamicJsonDocument responseDoc(16384);
     DeserializationError error = deserializeJson(responseDoc, response);
     
     if (!error && responseDoc.containsKey("candidates")) {
@@ -2474,13 +2948,15 @@ void sendToGemini() {
           ledSuccess();
         } else {
           aiResponse = "Error: Empty response";
+          ledError();
         }
       } else {
         aiResponse = "Error: No candidates";
+        ledError();
       }
     } else {
       ledError();
-      aiResponse = "JSON Error";
+      aiResponse = "JSON Parse Error";
     }
   } else {
     ledError();
@@ -2696,6 +3172,9 @@ void refreshCurrentScreen() {
     case STATE_ESP_NOW_PEERS:
       showESPNowPeers();
       break;
+    case STATE_ESP_NOW_PEER_OPTIONS:
+      showESPNowPeerOptions();
+      break;
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
       drawKeyboard();
@@ -2706,7 +3185,9 @@ void refreshCurrentScreen() {
   }
 }
 
+// FIXED: Battery level dengan pembacaan yang lebih stabil
 void updateBatteryLevel() {
+  // Multiple readings for stability
   int adcSum = 0;
   for (int i = 0; i < 10; i++) {
     adcSum += analogRead(BATTERY_PIN);
@@ -2720,15 +3201,17 @@ void updateBatteryLevel() {
   batteryPercent = map(batteryVoltage * 100, BATTERY_MIN_VOLTAGE * 100, BATTERY_MAX_VOLTAGE * 100, 0, 100);
   batteryPercent = constrain(batteryPercent, 0, 100);
   
+  // FIXED: More stable charging detection
   int chargingSum = 0;
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 10; i++) {
     chargingSum += analogRead(CHARGING_PIN);
     delay(2);
   }
-  int chargingValue = chargingSum / 5;
+  int chargingValue = chargingSum / 10;
   float chargingVoltage = (chargingValue / 4095.0) * 3.3 * VOLTAGE_DIVIDER_RATIO;
   
-  isCharging = (chargingVoltage > batteryVoltage + 0.3);
+  // More conservative charging detection threshold
+  isCharging = (chargingVoltage > batteryVoltage + 0.5);
 }
 
 void drawBatteryIndicator() {
@@ -2817,13 +3300,14 @@ void drawWiFiSignalBars() {
   }
 }
 
-// ========== BUTTON HANDLERS ==========
+// ========== BUTTON HANDLERS - FIXED ==========
 
 void handleUp() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      menuSelection = (menuSelection - 1 + 7) % 7;
-      showMainMenu();
+      mainMenuSelection = (mainMenuSelection - 1 + 7) % 7;
+      menuTargetScrollY = mainMenuSelection * 22;
+      menuTextScrollX = 0;
       break;
     case STATE_WIFI_MENU:
       menuSelection = (menuSelection - 1 + 3) % 3;
@@ -2846,20 +3330,30 @@ void handleUp() {
       showAPISelect();
       break;
     case STATE_ESP_NOW_MENU:
-      menuSelection = (menuSelection - 1 + 4) % 4;
+      espnowMenuSelection = (espnowMenuSelection - 1 + 4) % 4;
       showESPNowMenu();
       break;
     case STATE_ESP_NOW_SEND:
       if (peerCount > 0) {
-        selectedPeer = (selectedPeer - 1 + peerCount) % peerCount;
+        espnowPeerSelection = (espnowPeerSelection - 1 + peerCount) % peerCount;
         showESPNowSend();
       }
       break;
     case STATE_ESP_NOW_INBOX:
       if (inboxCount > 0) {
-        menuSelection = (menuSelection - 1 + inboxCount) % inboxCount;
+        espnowInboxSelection = (espnowInboxSelection - 1 + inboxCount) % inboxCount;
         showESPNowInbox();
       }
+      break;
+    case STATE_ESP_NOW_PEERS:
+      if (peerCount > 0) {
+        espnowPeerSelection = (espnowPeerSelection - 1 + peerCount) % peerCount;
+        showESPNowPeers();
+      }
+      break;
+    case STATE_ESP_NOW_PEER_OPTIONS:
+      espnowPeerOptionsSelection = (espnowPeerOptionsSelection - 1 + 3) % 3;
+      showESPNowPeerOptions();
       break;
     case STATE_WIFI_SCAN:
       if (networkCount > 0) {
@@ -2887,8 +3381,9 @@ void handleUp() {
 void handleDown() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      menuSelection = (menuSelection + 1) % 7;
-      showMainMenu();
+      mainMenuSelection = (mainMenuSelection + 1) % 7;
+      menuTargetScrollY = mainMenuSelection * 22;
+      menuTextScrollX = 0;
       break;
     case STATE_WIFI_MENU:
       menuSelection = (menuSelection + 1) % 3;
@@ -2911,20 +3406,30 @@ void handleDown() {
       showAPISelect();
       break;
     case STATE_ESP_NOW_MENU:
-      menuSelection = (menuSelection + 1) % 4;
+      espnowMenuSelection = (espnowMenuSelection + 1) % 4;
       showESPNowMenu();
       break;
     case STATE_ESP_NOW_SEND:
       if (peerCount > 0) {
-        selectedPeer = (selectedPeer + 1) % peerCount;
+        espnowPeerSelection = (espnowPeerSelection + 1) % peerCount;
         showESPNowSend();
       }
       break;
     case STATE_ESP_NOW_INBOX:
       if (inboxCount > 0) {
-        menuSelection = (menuSelection + 1) % inboxCount;
+        espnowInboxSelection = (espnowInboxSelection + 1) % inboxCount;
         showESPNowInbox();
       }
+      break;
+    case STATE_ESP_NOW_PEERS:
+      if (peerCount > 0) {
+        espnowPeerSelection = (espnowPeerSelection + 1) % peerCount;
+        showESPNowPeers();
+      }
+      break;
+    case STATE_ESP_NOW_PEER_OPTIONS:
+      espnowPeerOptionsSelection = (espnowPeerOptionsSelection + 1) % 3;
+      showESPNowPeerOptions();
       break;
     case STATE_WIFI_SCAN:
       if (networkCount > 0) {
@@ -2999,6 +3504,7 @@ void handleRight() {
   }
 }
 
+// FIXED: Handle Select dengan context yang jelas
 void handleSelect() {
   switch(currentState) {
     case STATE_MAIN_MENU:
@@ -3022,7 +3528,7 @@ void handleSelect() {
       handleSettingsMenuSelect();
       break;
     case STATE_DISPLAY_SETTINGS:
-      if (menuSelection == 2) { // Save & Back
+      if (menuSelection == 2) {
         ledSuccess();
         showStatus("Settings saved!", 1000);
         currentState = STATE_SETTINGS_MENU;
@@ -3044,38 +3550,44 @@ void handleSelect() {
       handleCalculatorInput();
       break;
     case STATE_ESP_NOW_MENU:
-      switch(menuSelection) {
+      switch(espnowMenuSelection) {
         case 0: // Send Message
           if (peerCount > 0) {
-            currentState = STATE_KEYBOARD;
-            userInput = "";
-            outgoingMessage = "";
-            cursorX = 0;
-            cursorY = 0;
-            drawKeyboard();
+            currentState = STATE_ESP_NOW_SEND;
+            espnowPeerSelection = 0;
+            showESPNowSend();
           } else {
-            showStatus("No peers!\nAdd via Serial", 2000);
+            ledError();
+            showStatus("No peers!\nAdd in Manage Peers", 2000);
             showESPNowMenu();
           }
           break;
         case 1: // Inbox
-          currentState = STATE_ESP_NOW_INBOX;
-          menuSelection = 0;
-          showESPNowInbox();
+          if (inboxCount > 0) {
+            currentState = STATE_ESP_NOW_INBOX;
+            espnowInboxSelection = 0;
+            showESPNowInbox();
+          } else {
+            showStatus("Inbox is empty", 1500);
+            showESPNowMenu();
+          }
           break;
         case 2: // Manage Peers
           currentState = STATE_ESP_NOW_PEERS;
+          espnowPeerSelection = 0;
           showESPNowPeers();
           break;
         case 3: // Back
           currentState = STATE_MAIN_MENU;
-          menuSelection = 0;
+          menuSelection = mainMenuSelection;
+          menuTargetScrollY = mainMenuSelection * 22;
           showMainMenu();
           break;
       }
       break;
     case STATE_ESP_NOW_SEND:
       if (peerCount > 0) {
+        keyboardContext = CONTEXT_ESPNOW_MESSAGE;
         currentState = STATE_KEYBOARD;
         userInput = "";
         cursorX = 0;
@@ -3086,21 +3598,62 @@ void handleSelect() {
       break;
     case STATE_ESP_NOW_INBOX:
       if (inboxCount > 0) {
-        inbox[menuSelection].read = true;
-        showStatus(inbox[menuSelection].text, 3000);
+        inbox[espnowInboxSelection].read = true;
+        showStatus(inbox[espnowInboxSelection].text, 3000);
         showESPNowInbox();
       }
       break;
     case STATE_ESP_NOW_PEERS:
-      currentState = STATE_ESP_NOW_MENU;
-      menuSelection = 0;
-      showESPNowMenu();
+      if (peerCount > 0) {
+        // Open peer options menu
+        currentState = STATE_ESP_NOW_PEER_OPTIONS;
+        espnowPeerOptionsSelection = 0;
+        showESPNowPeerOptions();
+      } else {
+        // Add new peer if no peers exist
+        if (peerCount < MAX_ESP_PEERS) {
+          keyboardContext = CONTEXT_ESPNOW_MAC;
+          currentState = STATE_KEYBOARD;
+          userInput = "";
+          cursorX = 0;
+          cursorY = 0;
+          currentKeyboardMode = MODE_MAC; // Use MAC keyboard mode
+          drawKeyboard();
+        } else {
+          ledError();
+          showStatus("Peer list is full!", 2000);
+          showESPNowPeers();
+        }
+      }
+      break;
+    case STATE_ESP_NOW_PEER_OPTIONS:
+      switch(espnowPeerOptionsSelection) {
+        case 0: // Rename
+          keyboardContext = CONTEXT_ESPNOW_PEER_NAME;
+          currentState = STATE_KEYBOARD;
+          userInput = peers[espnowPeerSelection].name;
+          cursorX = 0;
+          cursorY = 0;
+          currentKeyboardMode = MODE_LOWER;
+          drawKeyboard();
+          break;
+        case 1: // Delete
+          deletePeer(espnowPeerSelection);
+          currentState = STATE_ESP_NOW_PEERS;
+          showESPNowPeers();
+          break;
+        case 2: // Back
+          currentState = STATE_ESP_NOW_PEERS;
+          showESPNowPeers();
+          break;
+      }
       break;
     case STATE_WIFI_SCAN:
       if (networkCount > 0) {
         selectedSSID = networks[selectedNetwork].ssid;
         if (networks[selectedNetwork].encrypted) {
           passwordInput = "";
+          keyboardContext = CONTEXT_WIFI_PASSWORD;
           currentState = STATE_PASSWORD_INPUT;
           cursorX = 0;
           cursorY = 0;
@@ -3112,20 +3665,35 @@ void handleSelect() {
       }
       break;
     case STATE_KEYBOARD:
-      if (previousState == STATE_ESP_NOW_MENU || previousState == STATE_ESP_NOW_SEND) {
-        // ESP-NOW message mode
+      // FIXED: Context-aware keyboard OK handling
+      if (keyboardContext == CONTEXT_ESPNOW_MESSAGE) {
         const char* key = getCurrentKey();
-        if (strcmp(key, "OK") == 0 && userInput.length() > 0) {
-          if (peerCount > 0) {
-            sendESPNowMessage(userInput, peerAddresses[selectedPeer]);
+        if (strcmp(key, "OK") == 0) {
+          if (userInput.length() > 0 && peerCount > 0) {
+            sendESPNowMessage(userInput, peers[espnowPeerSelection].macAddr);
             userInput = "";
             currentState = STATE_ESP_NOW_MENU;
+            espnowMenuSelection = 0;
             showESPNowMenu();
           }
         } else {
           handleKeyPress();
         }
-      } else {
+      } else if (keyboardContext == CONTEXT_ESPNOW_PEER_NAME) {
+        const char* key = getCurrentKey();
+        if (strcmp(key, "OK") == 0) {
+          peers[espnowPeerSelection].name = userInput;
+          savePeers();
+          ledSuccess();
+          showStatus("Peer renamed!", 1500);
+          currentState = STATE_ESP_NOW_PEERS;
+          showESPNowPeers();
+        } else {
+          handleKeyPress();
+        }
+      } else if (keyboardContext == CONTEXT_ESPNOW_MAC) {
+        handleMacAddressKeyPress();
+      } else if (keyboardContext == CONTEXT_CHAT) {
         handleKeyPress();
       }
       break;
@@ -3137,6 +3705,8 @@ void handleSelect() {
       userInput = "";
       aiResponse = "";
       scrollOffset = 0;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
       showMainMenu();
       break;
   }
