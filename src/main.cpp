@@ -319,7 +319,7 @@ void sendToGemini();
 void checkWiFiTimeout();
 const char* getCurrentKey();
 void toggleKeyboardMode();
-void onESPNowDataReceived(const uint8_t * mac, const uint8_t *incomingData, int len);
+void onESPNowDataReceived(const esp_now_recv_info *info, const uint8_t *incomingData, int len);
 void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status);
 void initESPNow();
 void sendESPNowMessage(String message, uint8_t* targetMac);
@@ -641,7 +641,6 @@ void loop() {
         ledHeartbeat();
         break;
     }
-  }
   
   // Loading animation
   if (currentState == STATE_LOADING) {
@@ -756,7 +755,8 @@ void initESPNow() {
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-void onESPNowDataReceived(const uint8_t * mac, const uint8_t *incomingData, int len) {
+void onESPNowDataReceived(const esp_now_recv_info *info, const uint8_t *incomingData, int len) {
+  const uint8_t* mac_addr = info->src_addr;
   if (inboxCount >= MAX_MESSAGES) {
     for (int i = 0; i < MAX_MESSAGES - 1; i++) {
       inbox[i] = inbox[i + 1];
@@ -767,7 +767,7 @@ void onESPNowDataReceived(const uint8_t * mac, const uint8_t *incomingData, int 
   Message newMsg;
   strncpy(newMsg.text, (char*)incomingData, min(len, 199));
   newMsg.text[min(len, 199)] = '\0';
-  memcpy(newMsg.sender, mac, 6);
+  memcpy(newMsg.sender, mac_addr, 6);
   newMsg.timestamp = millis();
   newMsg.read = false;
   
@@ -942,31 +942,6 @@ void showESPNowMenu() {
   display.print("Peers:");
   display.print(peerCount);
   
-  display.display();
-}
-
-void showProgressBar(String title, int percent) {
-  display.clearDisplay();
-
-  display.setTextSize(1);
-  int titleW = title.length() * 6;
-  display.setCursor((SCREEN_WIDTH - titleW) / 2, 15);
-  display.print(title);
-
-  int barX = 10;
-  int barY = 30;
-  int barW = SCREEN_WIDTH - 20;
-  int barH = 12;
-
-  display.drawRect(barX, barY, barW, barH, SSD1306_WHITE);
-
-  int fillW = map(percent, 0, 100, 0, barW - 4);
-  display.fillRect(barX + 2, barY + 2, fillW, barH - 4, SSD1306_WHITE);
-
-  display.setCursor(55, 47);
-  display.print(percent);
-  display.print("%");
-
   display.display();
 }
 
@@ -1469,9 +1444,6 @@ void showSettingsMenu() {
     if (i == 0) {
       display.setCursor(95, y);
       display.print(wifiAutoOffEnabled ? "[ON]" : "[OFF]");
-    } else if (i == 3) {
-      display.setCursor(95, y);
-      display.print(devModeEnabled ? "[ON]" : "[OFF]");
     }
   }
   
@@ -3301,17 +3273,6 @@ void handleLeft() {
       cursorX = (cursorX - 1 + 4) % 4;
       showCalculator();
       break;
-    case STATE_DISPLAY_SETTINGS:
-      if (menuSelection == 0) {
-        fontSize = max(1, fontSize - 1);
-        preferences.putInt("fontSize", fontSize);
-        showDisplaySettings();
-      } else if (menuSelection == 1) {
-        animSpeed = max(50, animSpeed - 50);
-        preferences.putInt("animSpeed", animSpeed);
-        showDisplaySettings();
-      }
-      break;
   }
 }
 
@@ -3325,17 +3286,6 @@ void handleRight() {
     case STATE_CALCULATOR:
       cursorX = (cursorX + 1) % 4;
       showCalculator();
-      break;
-    case STATE_DISPLAY_SETTINGS:
-      if (menuSelection == 0) {
-        fontSize = min(2, fontSize + 1);
-        preferences.putInt("fontSize", fontSize);
-        showDisplaySettings();
-      } else if (menuSelection == 1) {
-        animSpeed = min(300, animSpeed + 50);
-        preferences.putInt("animSpeed", animSpeed);
-        showDisplaySettings();
-      }
       break;
   }
 }
@@ -3363,17 +3313,7 @@ void handleSelect() {
     case STATE_SETTINGS_MENU:
       handleSettingsMenuSelect();
       break;
-    case STATE_DISPLAY_SETTINGS:
-      if (menuSelection == 2) {
-        ledSuccess();
-        showStatus("Settings saved!", 1000);
-        currentState = STATE_SETTINGS_MENU;
-        settingsMenuSelection = 0;
-        showSettingsMenu();
-      }
-      break;
     case STATE_SYSTEM_INFO:
-    case STATE_DEVELOPER_MODE:
     case STATE_BATTERY_GUARDIAN:
       currentState = STATE_SETTINGS_MENU;
       settingsMenuSelection = 0;
