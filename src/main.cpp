@@ -1426,9 +1426,10 @@ void showSettingsMenu() {
     "Back"
   };
   
+  const int numItems = sizeof(menuItems) / sizeof(menuItems[0]);
   int visibleItems = 5;
   int startIdx = max(0, settingsMenuSelection - 2);
-  int endIdx = min(7, startIdx + visibleItems);
+  int endIdx = min(numItems, startIdx + visibleItems);
   
   for (int i = startIdx; i < endIdx; i++) {
     int y = 15 + (i - startIdx) * 10;
