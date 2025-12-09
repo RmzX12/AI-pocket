@@ -1391,7 +1391,6 @@ void handleKeyPress();
 void handlePasswordKeyPress();
 void handleBackButton();
 void connectToWiFi(String ssid, String password);
-void scanWiFiNetworks();
 void displayResponse();
 void showStatus(String message, int delayMs);
 void forgetNetwork();
