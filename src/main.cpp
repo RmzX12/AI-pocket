@@ -1624,11 +1624,23 @@ void setupBLE(String name) {
 }
 
 void updateBLESpam() {
-  // Simple burst logic: stop, update name, start, delay
-
   String currentName = bleTargetName;
+  bool shouldUpdate = false;
+
+  // In random mode, we update every iteration
   if (bleSpamRandomMode) {
       currentName = generateRandomSSID(); // Reuse SSID spammer names
+      shouldUpdate = true;
+  } else {
+      // In static mode, we only start once.
+      // If already running, do nothing (to avoid stop/start flickering/inefficiency)
+      if (!pAdvertising) shouldUpdate = true;
+  }
+
+  // If already running and static mode, just return
+  if (!shouldUpdate && pAdvertising) {
+      delay(100);
+      return;
   }
 
   // Swift Pair Payload
@@ -1653,21 +1665,16 @@ void updateBLESpam() {
 
   oAdvertisementData.setName(currentName.c_str());
 
-  // Note: BLEDevice::init(name) sets the local device name.
-  // oAdvertisementData.setName sets the name in the advertising packet.
-
   if (pAdvertising) {
       pAdvertising->stop();
       pAdvertising->setAdvertisementData(oAdvertisementData);
       pAdvertising->start();
   } else {
-      // First run initialization
       setupBLE(currentName);
       pAdvertising->setAdvertisementData(oAdvertisementData);
       pAdvertising->start();
   }
 
-  // Throttle to prevent crash or too fast
   delay(200);
 }
 
@@ -4230,7 +4237,7 @@ void showMainMenu(int x_offset) {
   for (int i = 0; i < numItems; i++) {
     int y = 4 + (i * 12); // Jarak antar ikon
     
-    if (i == mainMenuSelection) {
+    if (i == menuSelection) {
       // Kotak Seleksi (Inverted) di Sidebar
       display.fillRect(0 + x_offset, y - 2, sidebarWidth, 11, SSD1306_WHITE);
       // Gambar Ikon Hitam (Inverted)
@@ -4254,14 +4261,14 @@ void showMainMenu(int x_offset) {
   display.setTextSize(1);
   display.setCursor(contentX + 2, 1);
   display.print("MODE: ");
-  display.print(items[mainMenuSelection].title); // Judul Menu Terpilih
+  display.print(items[menuSelection].title); // Judul Menu Terpilih
 
   display.setTextColor(SSD1306_WHITE);
 
   // Subtitle / Deskripsi
   display.setCursor(contentX, 15);
   display.print(">> ");
-  display.print(items[mainMenuSelection].subtitle);
+  display.print(items[menuSelection].subtitle);
 
   // --- BAGIAN 3: WIDGET VISUAL (BIAR CANGGIH) ---
   // Kita gambar grafik/kotak info beda-beda tergantung menu yang dipilih
@@ -4269,7 +4276,7 @@ void showMainMenu(int x_offset) {
   int widgetY = 30;
   display.drawRect(contentX, widgetY, 94, 32, SSD1306_WHITE); // Frame Widget
 
-  if (mainMenuSelection == 0) {
+  if (menuSelection == 0) {
     // Tampilan CHAT AI: Gelombang Suara Palsu
     display.setCursor(contentX + 2, widgetY + 2); display.print("VOICE_LINK:");
     for (int i = 0; i < 80; i+=3) {
@@ -4277,7 +4284,7 @@ void showMainMenu(int x_offset) {
       display.drawLine(contentX + 2 + i, widgetY + 25, contentX + 2 + i, widgetY + 25 - h, SSD1306_WHITE);
     }
   }
-  else if (mainMenuSelection == 1) {
+  else if (menuSelection == 1) {
     // Tampilan WIFI: Grafik Sinyal & Data Packet
     display.setCursor(contentX + 2, widgetY + 2); display.print("AIR_TRAFFIC:");
     // Grafik garis acak
@@ -4288,7 +4295,7 @@ void showMainMenu(int x_offset) {
       prevY = newY;
     }
   }
-  else if (mainMenuSelection == 4) {
+  else if (menuSelection == 4) {
     // Tampilan SYSTEM: Memory Block
     display.setCursor(contentX + 2, widgetY + 2); display.print("MEM_DUMP:");
     for(int y=0; y<3; y++) {
