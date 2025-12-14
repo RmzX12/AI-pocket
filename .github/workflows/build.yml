@@ -1,51 +1,47 @@
-name: Build and Release Firmware
+name: JULES BUILD PIPELINE
 
 on:
   push:
-    branches:
-      - main
-    tags:
-      - 'v*.*.*'
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Required to create/update releases
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - name: CHECKOUT REPO (GRAB THE GOODS)
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
+    - name: PREPARE SKETCH (TRANSFORM AND ROLL OUT)
+      run: |
+        cp src/main.cpp AI-pocket.ino
+        cp src/secrets.h secrets.h
 
-      - name: Install PlatformIO
-        run: pip install platformio
+    - name: SETUP ARDUINO CLI (LOAD THE GUN)
+      uses: arduino/setup-arduino-cli@v1
 
-      - name: Build project
-        run: pio run
+    - name: INSTALL ESP32 CORE (PREPARE THE TARGET)
+      run: |
+        arduino-cli config init
+        arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+        arduino-cli core install esp32:esp32 --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
 
-      - name: Determine Release Properties
-        id: release_properties
-        run: |
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "release_tag=nightly" >> $GITHUB_ENV
-            echo "prerelease=true" >> $GITHUB_ENV
-            echo "release_name=Nightly Build" >> $GITHUB_ENV
-          else
-            echo "release_tag=${{ github.ref_name }}" >> $GITHUB_ENV
-            echo "prerelease=false" >> $GITHUB_ENV
-            echo "release_name=Release ${{ github.ref_name }}" >> $GITHUB_ENV
-          fi
+    - name: INSTALL LIBRARIES (GATHER THE CREW)
+      run: |
+        arduino-cli lib install "ArduinoJson"
+        arduino-cli lib install "Adafruit GFX Library"
+        arduino-cli lib install "Adafruit SSD1306"
+        arduino-cli lib install "Adafruit NeoPixel"
 
-      - name: Create or Update Release with firmware.bin
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ env.release_tag }}
-          name: ${{ env.release_name }}
-          prerelease: ${{ env.prerelease }}
-          files: .pio/build/esp32-c3-devkitm-1/firmware.bin
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: COMPILE SKETCH (STRIKE DOWN WITH VENGEANCE)
+      run: |
+        mkdir build
+        # Compile for ESP32-S3 with PSRAM enabled and Huge App partition scheme
+        arduino-cli compile --fqbn esp32:esp32:esp32s3:FlashMode=qio,PSRAM=opi,PartitionScheme=huge_app --output-dir ./build .
+
+    - name: UPLOAD ARTIFACT (DELIVER THE PACKAGE)
+      uses: actions/upload-artifact@v4
+      with:
+        name: S3-Station-Firmware
+        path: ./build/*.bin

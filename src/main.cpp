@@ -12,6 +12,12 @@
 #include <esp_sntp.h>
 #include <esp_wifi.h>
 #include <Fonts/Org_01.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+#include <WebServer.h>
+#include <Update.h>
+#include <ESPmDNS.h>
 #include "secrets.h"
 
 // NeoPixel LED settings
@@ -68,6 +74,10 @@ enum AppState {
   STATE_TOOL_DETECTOR,
   STATE_DEAUTH_SELECT,
   STATE_TOOL_DEAUTH,
+  STATE_TOOL_PROBE_SNIFFER,
+  STATE_TOOL_BLE_MENU,
+  STATE_TOOL_BLE_RUN,
+  STATE_TOOL_COURIER,
   STATE_PIN_LOCK,
   STATE_CHANGE_PIN,
   STATE_SCREEN_SAVER,
@@ -149,7 +159,8 @@ KeyboardMode currentKeyboardMode = MODE_LOWER;
 
 enum KeyboardContext {
   CONTEXT_CHAT,
-  CONTEXT_WIFI_PASSWORD
+  CONTEXT_WIFI_PASSWORD,
+  CONTEXT_BLE_NAME
 };
 KeyboardContext keyboardContext = CONTEXT_CHAT;
 
@@ -467,11 +478,13 @@ void drawMatrix() {
 typedef struct {
   int16_t fctl;
   int16_t duration;
-  uint8_t da[6];
-  uint8_t sa[6];
+  uint8_t dest[6];
+  uint8_t src[6];
   uint8_t bssid[6];
   int16_t seqctl;
 } __attribute__((packed)) mac_hdr_t;
+
+void scanWiFiNetworks();
 
 typedef struct {
   mac_hdr_t hdr;
@@ -503,26 +516,40 @@ wifi_promiscuous_filter_t filt = {
     .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT
 };
 
-extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3) { return 0; }
+// extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3) { return 0; }
 esp_err_t esp_wifi_80211_tx(wifi_interface_t ifx, const void *buffer, int len, bool en_sys_seq);
 
 // --- SSID SPAMMER CONFIG ---
-const char* fakeSSIDs[] = {
-  "HP LU KENA VIRUS",
-  "JANGAN MALING WIFI",
-  "HACKED BY ESP32",
-  "RUMAH HANTU 666",
-  "FBI SURVEILLANCE #1",
-  "Awas Ada Copet",
-  "MAKAN GRATIS DISINI",
-  "SYSTEM ERROR 404",
-  "ESP32 ATTACK MODE",
-  "SKIBIDI TOILET",
-  "NETWORK_DESTROYER",
-  "JANGAN_KONEK_SINI"
+const char* spamPrefixes[] = {
+  "VIRUS", "MALWARE", "TROJAN", "WORM", "SPYWARE",
+  "RANSOMWARE", "BOTNET", "ROOTKIT", "KEYLOGGER", "ADWARE",
+  "POLISI_SIBER", "BIN_SURVEILLANCE", "FBI_VAN", "CIA_SAFEHOUSE", "NSA_NODE",
+  "INTERPOL_HQ", "DENSUS_88", "SATELIT_MATA2", "CCTV_KOTA", "DRONE_INTEL",
+  "HP_MELEDAK", "SEDOT_PULSA", "HACK_CAMERA", "FORMAT_DATA", "DELETE_OS",
+  "SYSTEM_CRASH", "BOOTLOOP", "OVERHEAT", "BATTERY_DRAIN", "SIM_CLONING",
+  "JANGAN_KONEK", "ADA_HANTU", "RUMAH_ANGKER", "POCONG_GAMING", "KUNTILANAK",
+  "TUYUL_ONLINE", "SANTET_E-WALLET", "PELAKOR_DETECTED", "HUTANG_BAYAR",
+  "FREE_WIFI_SCAM", "LOGIN_FB_GRATIS", "PHISHING_LINK", "CLICKBAIT", "404_NOT_FOUND",
+  "ACCESS_DENIED", "BANNED_USER", "RESTRICTED_AREA", "DANGER_ZONE", "HIGH_VOLTAGE",
+  "ASUS_ROG", "IPHONE_15_PRO", "SAMSUNG_S24", "XIAOMI_14_ULTRA", "STARLINK_V2"
 };
-const int TOTAL_FAKE_SSIDS = 12;
+const int TOTAL_PREFIXES = 54;
 uint8_t spamChannel = 1;
+
+String generateRandomSSID() {
+  String ssid = String(spamPrefixes[random(0, TOTAL_PREFIXES)]);
+  // Add random suffix for uniqueness
+  if (random(0, 2)) {
+    ssid += "_";
+    ssid += String(random(100, 999));
+  }
+  // Sometimes add Hex
+  if (random(0, 5) == 0) {
+    ssid += "_0x";
+    ssid += String(random(0, 255), HEX);
+  }
+  return ssid;
+}
 
 // Raw 802.11 Beacon Frame Packet
 uint8_t packet[128] = {
@@ -541,6 +568,13 @@ uint8_t packet[128] = {
 int deauthCount = 0;
 unsigned long lastDeauthTime = 0;
 bool underAttack = false;
+String attackerMAC = "Unknown";
+
+// --- PROBE SNIFFER CONFIG ---
+String detectedProbeSSID = "Searching...";
+String detectedProbeMAC = "Listening...";
+String probeHistory[5]; // Simpan 5 jejak terakhir
+int probeHistoryIndex = 0;
 
 // Graphing Globals
 #define GRAPH_WIDTH 64
@@ -551,10 +585,19 @@ int lastDeauthCount = 0;
 
 // Forward Declarations for Screen Saver & Lock
 void drawStatusBar();
+void drawHeader(String text); // Forward declaration
+void drawBar(int percent, int y); // Forward declaration
 void drawKeyboard(int x_offset = 0);
+void drawPinKeyboard(int x_offset = 0);
 void changeState(AppState newState);
 void toggleKeyboardMode();
 const char* getCurrentKey();
+void ledQuickFlash();
+void drawGenericListMenu(int x_offset, const char* title, const unsigned char* icon, const char** items, int itemCount, int selection, float* scrollY);
+void drawProbeSniffer();
+void updateProbeSniffer();
+void drawCourierTool();
+void checkResiReal();
 
 // Chat History
 String chatHistory = "";
@@ -989,6 +1032,14 @@ const unsigned char ICON_SYS_TOOLS[] PROGMEM = {
   0x18, 0x3C, 0x7E, 0xFF, 0x5A, 0x24, 0x18, 0x00
 };
 
+const unsigned char ICON_BLE[] PROGMEM = {
+  0x18, 0x5A, 0xDB, 0x5A, 0x18, 0x18, 0x18, 0x18
+};
+
+const unsigned char ICON_TRUCK[] PROGMEM = {
+  0x00, 0x18, 0x7E, 0x7E, 0x7E, 0x24, 0x00, 0x00
+};
+
 // Racing Car Sprites (16x16)
 const unsigned char BITMAP_CAR_STRAIGHT[] PROGMEM = {
   0x03, 0xC0, 0x0F, 0xF0, 0x1F, 0xF8, 0x3F, 0xFC,
@@ -1016,6 +1067,74 @@ const unsigned char BITMAP_ENEMY[] PROGMEM = {
   0x38, 0x1C, 0x38, 0x1C, 0x3F, 0xFC, 0x3F, 0xFC,
   0x3F, 0xFC, 0x39, 0x9C, 0x39, 0x9C, 0x39, 0x9C,
   0x3F, 0xFC, 0x1F, 0xF8, 0x0F, 0xF0, 0x03, 0xC0
+};
+
+// '09f6b70b000f29d19836dcd2ede0b6e8', 128x64px
+const unsigned char epd_bitmap_09f6b70b000f29d19836dcd2ede0b6e8 [] PROGMEM = {
+	0x00, 0x00, 0x00, 0x02, 0xff, 0x80, 0x1f, 0xff, 0xff, 0xc3, 0xff, 0xff, 0xff, 0xfb, 0xf8, 0x1f,
+	0x00, 0x00, 0x00, 0x19, 0xfe, 0x00, 0x7f, 0xff, 0xff, 0x87, 0xff, 0xff, 0xff, 0xfb, 0xf0, 0x3f,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xff, 0xff, 0xff, 0x0f, 0xff, 0xff, 0xff, 0xff, 0xf0, 0x3f,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xff, 0xff, 0xfe, 0x1f, 0xff, 0xff, 0xff, 0xff, 0xe0, 0x3f,
+	0x00, 0x00, 0x0f, 0x80, 0x00, 0x00, 0x00, 0x1f, 0xfc, 0x3f, 0xff, 0xff, 0xff, 0xff, 0xe0, 0x3f,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x7f, 0xf0, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xbf,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xff, 0xfe, 0x00, 0x00, 0x0f, 0xff, 0xff, 0xf7, 0xc0, 0xbf,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xfc, 0xc3, 0xfe, 0x00, 0x00, 0xff, 0xff, 0xc1, 0xbf,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x39, 0x07, 0xff, 0xff, 0xf8, 0x00, 0x6f, 0x81, 0xff,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xff, 0xff, 0xff, 0xff, 0x00, 0x03, 0x7f,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xff, 0xff, 0xff, 0xff, 0xee, 0x00, 0x0f,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xfe, 0x07, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xff, 0xff, 0xff, 0xde, 0x0f, 0x78,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xdc, 0x0f, 0x7f,
+	0x00, 0x00, 0x00, 0x00, 0x1f, 0xff, 0xfc, 0x1f, 0xfe, 0x00, 0x1f, 0xff, 0xff, 0xc0, 0x1e, 0x60,
+	0x00, 0x00, 0x00, 0x07, 0xff, 0xff, 0xfc, 0x7f, 0xff, 0xff, 0xe7, 0xff, 0xff, 0x80, 0x3e, 0x00,
+	0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x80, 0x3e, 0x00,
+	0x00, 0x00, 0x0f, 0xff, 0xfc, 0x00, 0x00, 0x00, 0x00, 0x1f, 0xff, 0xff, 0xff, 0x00, 0x7e, 0x00,
+	0x00, 0x01, 0xff, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0xff, 0xff, 0x00, 0xfc, 0x00,
+	0x00, 0x1f, 0xc0, 0x00, 0x03, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0xfc, 0x00,
+	0x01, 0xf0, 0x00, 0x0f, 0xff, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xfe, 0x01, 0xfc, 0x00,
+	0x07, 0xf8, 0x07, 0xff, 0xff, 0xf8, 0x00, 0x7f, 0xf8, 0x00, 0x00, 0x00, 0x7c, 0x03, 0xfc, 0x00,
+	0x07, 0xc1, 0xff, 0xff, 0xff, 0xf0, 0x07, 0xff, 0xff, 0xf0, 0x00, 0x00, 0x00, 0x07, 0xf8, 0x00,
+	0x02, 0x3f, 0xff, 0xff, 0xff, 0xd0, 0x3f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x07, 0xf8, 0x00,
+	0x00, 0xff, 0xff, 0xff, 0xff, 0x60, 0xff, 0xe0, 0x0f, 0xff, 0xf0, 0x00, 0x00, 0x0f, 0xf8, 0x00,
+	0x00, 0x3f, 0xff, 0xff, 0xff, 0xc3, 0xff, 0x00, 0x0f, 0xff, 0x0e, 0x00, 0x00, 0x01, 0xf0, 0x00,
+	0x00, 0x0f, 0xff, 0xff, 0xff, 0x8f, 0xf8, 0x00, 0x1f, 0xfe, 0x07, 0x80, 0x00, 0x00, 0x30, 0x00,
+	0x00, 0x07, 0xff, 0xff, 0xff, 0x9f, 0xe1, 0xf0, 0x3f, 0xfe, 0x0f, 0x80, 0x04, 0x00, 0x00, 0x00,
+	0x00, 0x01, 0xff, 0xff, 0xff, 0xbf, 0xcf, 0xe0, 0x1f, 0xf0, 0x3f, 0xe0, 0x0f, 0x80, 0x00, 0x00,
+	0x00, 0x00, 0xff, 0xff, 0xff, 0x7f, 0xff, 0xc0, 0xcf, 0xc0, 0x0f, 0xf0, 0x0f, 0xe0, 0x00, 0x00,
+	0x00, 0x00, 0x7f, 0xff, 0xff, 0x7f, 0xff, 0x81, 0xe6, 0x00, 0x1f, 0xe0, 0x0f, 0xfc, 0x00, 0x00,
+	0x00, 0x00, 0x7f, 0xff, 0xff, 0x7f, 0xff, 0xc1, 0xff, 0xc0, 0x1f, 0xe0, 0x1f, 0xff, 0x00, 0x00,
+	0x00, 0x00, 0x3f, 0xff, 0xff, 0xff, 0xff, 0xc3, 0xff, 0xc0, 0x3f, 0xe0, 0x1f, 0xff, 0xc0, 0x00,
+	0x00, 0x00, 0x1f, 0xff, 0xff, 0x3f, 0xff, 0xcf, 0xff, 0x80, 0x7f, 0xf0, 0x3f, 0xff, 0xc0, 0x00,
+	0x00, 0x00, 0x0f, 0xff, 0xff, 0xe7, 0xff, 0xff, 0xff, 0x80, 0xff, 0xf0, 0x3f, 0xff, 0x80, 0x00,
+	0x00, 0x00, 0x07, 0xff, 0xff, 0xff, 0xff, 0x3f, 0xff, 0x07, 0xff, 0xf0, 0x7f, 0xff, 0x80, 0x00,
+	0x00, 0x00, 0x03, 0xff, 0xff, 0xff, 0x3f, 0x7f, 0xfe, 0x3f, 0xff, 0xf0, 0xff, 0xff, 0x80, 0x00,
+	0x00, 0x00, 0x01, 0xff, 0xff, 0x80, 0x00, 0x1f, 0xfe, 0xdf, 0xff, 0xe1, 0xff, 0xff, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0xff, 0xff, 0xc0, 0x00, 0x01, 0xfe, 0x1f, 0xff, 0xe3, 0xff, 0xff, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x0f, 0xff, 0xc0, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xc7, 0xff, 0xfe, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x7f, 0xe0, 0x00, 0x00, 0x00, 0xff, 0xff, 0x9f, 0xff, 0xfc, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x03, 0xf0, 0x00, 0x00, 0x00, 0x3f, 0xfe, 0x7f, 0xff, 0xfc, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xff, 0xff, 0xf8, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xff, 0xff, 0xf0, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f, 0xff, 0xff, 0xc0, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7f, 0xe0, 0x00, 0x0f, 0xff, 0xff, 0xfc, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xff, 0x07, 0xff, 0xff, 0xff, 0xf0, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xff, 0xf8, 0xff, 0xff, 0xff, 0xc0, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xc0, 0x7f, 0xfc, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xff, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
 // Video Player Data
@@ -1211,15 +1330,23 @@ void initSpammer() {
 }
 
 void updateSpammer() {
-  // Prevent WDT Reset by yielding
-  delay(1);
+  // Burst mode: Send multiple packets per frame
+  // Generating "Hundreds" effect by sending ~15 unique SSIDs per loop iteration (which runs at ~60-90Hz)
+  // This results in ~1000 beacons per second.
 
-  spamChannel = (spamChannel % 13) + 1;
-  esp_wifi_set_channel(spamChannel, WIFI_SECOND_CHAN_NONE);
+  for(int i=0; i<15; i++) {
+      // 1. Acak nama
+      String namaAcak = generateRandomSSID();
 
-  for(int i=0; i<TOTAL_FAKE_SSIDS; i++) {
-    sendBeacon(fakeSSIDs[i]);
-    delay(10); // Increased delay to prevent congestion/crash
+      // 2. Masukin & TEMBAK (sendBeacon handles building packet and tx)
+      sendBeacon(namaAcak.c_str());
+
+      // 3. Ganti Channel (Spread the jamming)
+      spamChannel = (spamChannel % 13) + 1;
+      esp_wifi_set_channel(spamChannel, WIFI_SECOND_CHAN_NONE);
+
+      // 4. Delay dikit (per user request logic)
+      delay(2); // Small delay to avoid complete WDT freeze but fast enough
   }
 }
 
@@ -1241,12 +1368,18 @@ void drawSpammer() {
 
   display.setCursor(5, 35);
   display.print("> ");
-  display.print(fakeSSIDs[random(0, TOTAL_FAKE_SSIDS)]);
+  // Show a random sample name
+  if (millis() % 200 == 0) {
+      display.fillRect(5, 35, 120, 10, SSD1306_BLACK); // Clear prev text
+      display.setCursor(5, 35);
+      display.print("> ");
+      display.print(generateRandomSSID().substring(0, 14));
+  }
 
   display.drawLine(0, 48, SCREEN_WIDTH, 48, SSD1306_WHITE);
   display.setCursor(0, 52);
-  display.print("CH: "); display.print(spamChannel);
-  display.print(" PKT: "); display.print(millis()/50);
+  display.print("CH: ALL");
+  display.print(" PKT: "); display.print(millis()/10); // Simulated high packet count
 
   display.display();
 }
@@ -1255,15 +1388,124 @@ void drawSpammer() {
 void deauth_sniffer_callback(void* buf, wifi_promiscuous_pkt_type_t type) {
   wifi_promiscuous_pkt_t *p = (wifi_promiscuous_pkt_t*)buf;
   uint8_t *frame = p->payload;
+  int len = p->rx_ctrl.sig_len;
 
+  // Cek Frame Control
   uint8_t type_bits = (frame[0] >> 2) & 0x03;
   uint8_t subtype_bits = (frame[0] >> 4) & 0xF;
 
+  // --- LOGIKA 1: DEAUTH DETECTOR (Yang tadi) ---
   if (type_bits == 0 && (subtype_bits == 0xC || subtype_bits == 0xA)) {
     deauthCount++;
     lastDeauthTime = millis();
     underAttack = true;
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             frame[10], frame[11], frame[12], frame[13], frame[14], frame[15]);
+    attackerMAC = String(macStr);
   }
+
+  // --- LOGIKA 2: PROBE REQUEST SNIFFER (Fitur Baru) ---
+  // Subtype 4 = Probe Request (HP nyari WiFi)
+  if (type_bits == 0 && subtype_bits == 0x4) {
+
+    // Ambil MAC Address HP Pengirim (Byte 10-15)
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             frame[10], frame[11], frame[12], frame[13], frame[14], frame[15]);
+
+    // Parsing SSID (Nama WiFi yang dicari)
+    // Payload manajemen frame mulai di byte 24
+    int pos = 24;
+
+    // Loop parsing Tagged Parameters (Tag Number, Tag Length, Data)
+    while (pos < len) {
+      uint8_t tagNum = frame[pos];
+      uint8_t tagLen = frame[pos+1];
+
+      if (pos + 2 + tagLen > len) break; // Safety check
+
+      // Tag 0 adalah SSID
+      if (tagNum == 0 && tagLen > 0) {
+        char ssidBuf[33];
+        // Copy SSID (max 32 chars)
+        int copyLen = (tagLen > 32) ? 32 : tagLen;
+        memcpy(ssidBuf, &frame[pos+2], copyLen);
+        ssidBuf[copyLen] = '\0'; // Null terminate
+
+        String newSSID = String(ssidBuf);
+
+        // Filter nama kosong/sampah
+        if (newSSID.length() > 0 && newSSID != detectedProbeSSID) {
+           detectedProbeSSID = newSSID;
+           detectedProbeMAC = String(macStr);
+
+           // Simpan ke History (Geser array)
+           for(int i=4; i>0; i--) probeHistory[i] = probeHistory[i-1];
+           probeHistory[0] = "[" + newSSID + "]";
+
+           // Efek Visual (Flash Pixel Biru - Intel style)
+           triggerNeoPixelEffect(pixels.Color(0, 0, 255), 50);
+        }
+        break; // Udah dapet SSID, keluar loop
+      }
+
+      pos += 2 + tagLen; // Lanjut ke tag berikutnya
+    }
+  }
+}
+
+void initProbeSniffer() {
+    WiFi.disconnect();
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_promiscuous_rx_cb(&deauth_sniffer_callback);
+}
+
+// 3. FUNGSI UPDATE (Panggil ini di loop saat mode Probe Sniffer aktif)
+// Kita perlu Channel Hopping biar dapet sinyal dari semua frekuensi
+void updateProbeSniffer() {
+  // Ganti channel setiap 200ms
+  if (millis() % 200 == 0) {
+    int ch = (millis() / 200) % 13 + 1;
+    esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+  }
+}
+
+// 4. TAMPILAN LAYAR (Copy fungsi baru ini)
+void drawProbeSniffer() {
+  display.clearDisplay();
+  drawStatusBar(); // Pake status bar yang udah ada
+
+  // Header Keren
+  display.fillRect(0, 10, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(25, 12);
+  display.print("PROBE HUNTER");
+
+  display.setTextColor(SSD1306_WHITE);
+
+  // Tampilkan data terakhir yang ketangkep
+  display.setTextSize(1);
+  display.setCursor(0, 25);
+  display.print("SRC: "); display.print(detectedProbeMAC);
+
+  display.setCursor(0, 35);
+  display.print("ASK: ");
+
+  // Highlight SSID yang dicari
+  display.setTextColor(SSD1306_BLACK, SSD1306_WHITE); // Invert text
+  display.print(detectedProbeSSID);
+  display.setTextColor(SSD1306_WHITE); // Balikin normal
+
+  // Tampilkan History Singkat di bawah
+  display.drawLine(0, 46, SCREEN_WIDTH, 46, SSD1306_WHITE);
+  display.setCursor(0, 50);
+  display.setTextSize(1);
+  // Cuma nampilin history terakhir biar layar gak penuh
+  display.print("Hist: ");
+  display.print(probeHistory[1]);
+
+  display.display();
 }
 
 void initDetector() {
@@ -1304,14 +1546,31 @@ void updateDetector() {
 void drawDetector() {
   display.clearDisplay();
 
+  // --- EFEK SENTINEL: LAYAR GLITCH SAAT DISERANG ---
+  if (underAttack) {
+      // Layar kedip-kedip (Invert) setiap 100ms biar panik
+      bool blink = (millis() / 100) % 2;
+      display.invertDisplay(blink);
+
+      // Flash LED Merah (Tanda Bahaya)
+      if ((millis() / 50) % 2 == 0) pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+      else pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+      pixels.show();
+  } else {
+      display.invertDisplay(false); // Balikin layar normal kalau aman
+      pixels.setPixelColor(0, pixels.Color(0, 0, 0)); // Matikan LED
+      pixels.show();
+  }
+
+  // Header
   display.fillRect(0, 0, SCREEN_WIDTH, 12, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
   display.setCursor(20, 2);
-  display.print("WIFI GUARD");
+  display.print(underAttack ? "! WARNING !" : "WIFI GUARD");
 
   display.setTextColor(SSD1306_WHITE);
 
-  // Draw Graph
+  // Gambar Grafik Sinyal (Sama kayak yang lama)
   int graphBaseY = 63;
   int maxVal = 10;
   for(int i=0; i<GRAPH_WIDTH; i++) if(deauthHistory[i] > maxVal) maxVal = deauthHistory[i];
@@ -1319,29 +1578,368 @@ void drawDetector() {
   for (int i = 0; i < GRAPH_WIDTH; i++) {
       int idx = (graphHead + i) % GRAPH_WIDTH;
       int val = deauthHistory[idx];
-
       int h = map(val, 0, maxVal, 0, 30);
       if (h > 0) {
         display.drawLine(i * 2, graphBaseY, i * 2, graphBaseY - h, SSD1306_WHITE);
       }
   }
 
+  // --- TAMPILAN INFO PELAKU ---
   if (underAttack) {
     display.setTextSize(1);
+
     display.setCursor(0, 15);
     display.print("ATTACK DETECTED!");
-    display.setCursor(0, 25);
-    display.print("Total: "); display.print(deauthCount);
 
-    if ((millis() / 200) % 2 == 0) triggerNeoPixelEffect(pixels.Color(255, 0, 0), 50);
+    // Tampilkan MAC Address Pelaku
+    display.setCursor(0, 25);
+    display.print("SRC: ");
+    display.print(attackerMAC);
+
+    display.setCursor(0, 35);
+    display.print("Pkts: "); display.print(deauthCount);
+
   } else {
+    // Tampilan Standar (Lagi Nyari)
     display.setCursor(0, 15);
     display.print("Status: Safe");
+
     display.setCursor(0, 25);
-    display.print("Scanning...");
+    display.print("Scanning Air...");
+
+    display.setCursor(0, 35);
+    display.print("Pkts: "); display.print(deauthCount);
   }
 
   display.display();
+}
+
+// --- BLE SPAMMER LOGIC ---
+String bleTargetName = "SwiftPair_Dev";
+bool bleSpamRandomMode = false;
+BLEAdvertising *pAdvertising = NULL;
+BLEServer *pServer = NULL;
+
+void setupBLE(String name) {
+  // Check if already initialized to avoid crash
+  // BLEDevice::init is idempotent in recent versions but let's be safe
+  // We can't easily check if initialized, but re-init usually requires deinit
+  // For simplicity, we assume we clean up properly on exit
+
+  BLEDevice::init(name.c_str());
+  pServer = BLEDevice::createServer();
+  pAdvertising = pServer->getAdvertising();
+  pAdvertising->setAppearance(0x03C1); // Keyboard
+}
+
+void updateBLESpam() {
+  String currentName = bleTargetName;
+  if (bleSpamRandomMode) {
+      currentName = generateRandomSSID();
+  }
+
+  // Swift Pair Payload
+  char swiftPairPayload[] = {
+      0x06, 0x00, // Microsoft Vendor ID
+      0x03,       // Microsoft Beacon ID
+      0x00,       // Scenario Type
+      0x80,       // Device Type
+      0x00, 0x00, 0x00 // Reserved
+  };
+
+  BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
+  oAdvertisementData.setFlags(0x04);
+
+  #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    // Use String constructor for binary data
+    oAdvertisementData.setManufacturerData(String(swiftPairPayload, 7));
+  #else
+    // Use std::string for v2
+    oAdvertisementData.setManufacturerData(std::string(swiftPairPayload, 7));
+  #endif
+
+  oAdvertisementData.setName(currentName.c_str());
+
+  if (pAdvertising) {
+      pAdvertising->stop();
+      pAdvertising->setAdvertisementData(oAdvertisementData);
+      pAdvertising->start();
+  } else {
+      setupBLE(currentName);
+      pAdvertising->setAdvertisementData(oAdvertisementData);
+      pAdvertising->start();
+  }
+
+  delay(200);
+}
+
+void stopBLESpam() {
+  if (pAdvertising) {
+      pAdvertising->stop();
+  }
+  // Cleaning up BLE completely is tricky on Arduino ESP32 without reboot
+  // We will just stop advertising.
+  // Ideally: BLEDevice::deinit(true); if supported
+}
+
+void drawBLEMenu(int x_offset) {
+  const char* items[] = {
+    "Set Name",
+    "Start Static",
+    "Start Random",
+    "Back"
+  };
+  static float bleScrollY = 0;
+  drawGenericListMenu(x_offset, "BLE SPAMMER", ICON_BLE, items, 4, menuSelection, &bleScrollY);
+}
+
+void handleBLEMenuSelect() {
+  switch(menuSelection) {
+    case 0: // Set Name
+      userInput = bleTargetName;
+      keyboardContext = CONTEXT_BLE_NAME;
+      cursorX = 0;
+      cursorY = 0;
+      changeState(STATE_KEYBOARD);
+      break;
+    case 1: // Start Static
+      bleSpamRandomMode = false;
+      changeState(STATE_TOOL_BLE_RUN);
+      break;
+    case 2: // Start Random
+      bleSpamRandomMode = true;
+      changeState(STATE_TOOL_BLE_RUN);
+      break;
+    case 3: // Back
+      changeState(STATE_SYSTEM_SUB_TOOLS);
+      break;
+  }
+}
+
+void drawBLERun() {
+  display.clearDisplay();
+
+  // Hacker animation effect
+  if (random(0, 10) == 0) display.invertDisplay(true);
+  else display.invertDisplay(false);
+
+  display.fillRect(0, 0, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(1);
+  display.setCursor(30, 2);
+  display.print("BLE ATTACK");
+
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 20);
+  display.print("Mode: ");
+  display.print(bleSpamRandomMode ? "RANDOM" : "STATIC");
+
+  display.setCursor(0, 35);
+  display.print("Name: ");
+  if (bleSpamRandomMode) {
+      display.print(generateRandomSSID().substring(0, 10) + "..");
+  } else {
+      display.print(bleTargetName.substring(0, 12));
+  }
+
+  display.setCursor(0, 50);
+  display.print("Status: BROADCASTING");
+
+  display.display();
+}
+
+// --- COURIER TRACKER LOGIC ---
+String bb_apiKey = BINDERBYTE_API_KEY;
+String bb_kurir  = BINDERBYTE_COURIER;
+String bb_resi   = DEFAULT_COURIER_RESI;
+String courierStatus = "SYSTEM READY";
+String courierLastLoc = "-";
+String courierDate = "";
+bool isTracking = false;
+
+void drawCourierTool() {
+    display.clearDisplay();
+    // Use the requested "BINDERBYTE OPS" header style
+    display.fillRect(0, 0, 128, 12, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+    display.setCursor(25, 2);
+    display.print("BINDERBYTE OPS");
+    display.setTextColor(SSD1306_WHITE);
+
+    display.setTextSize(1);
+    display.setCursor(0, 16); display.print("RESI: "); display.print(bb_resi);
+
+    // Status Box
+    display.drawRect(0, 26, 128, 14, SSD1306_WHITE);
+    int c = (128 - (courierStatus.length()*6)) / 2; if(c<2) c=2;
+    display.setCursor(c, 29);
+    if(isTracking && (millis()/200)%2==0) display.print("..."); else display.print(courierStatus);
+
+    // Location & Date
+    display.setCursor(0, 44); display.print("LOC: ");
+    if(courierLastLoc.length()>14) display.print(courierLastLoc.substring(0,14)); else display.print(courierLastLoc);
+
+    display.setCursor(0, 54); display.print("TGL: ");
+    if(courierDate.length()>0) display.print(courierDate.substring(0,16));
+
+    // Indikator OTA Ready (Titik di pojok)
+    if((millis()/1000)%2==0) display.fillCircle(124, 60, 2, SSD1306_WHITE);
+
+    display.display();
+}
+
+void checkResiReal() {
+    if(WiFi.status() != WL_CONNECTED) {
+        courierStatus = "NO WIFI";
+        return;
+    }
+
+    isTracking = true;
+    courierStatus = "FETCHING...";
+    drawCourierTool(); // Force update
+
+    WiFiClientSecure client;
+    client.setInsecure(); // Bypass SSL Certificate Check
+
+    HTTPClient http;
+    String url = "https://api.binderbyte.com/v1/track?api_key=" + bb_apiKey + "&courier=" + bb_kurir + "&awb=" + bb_resi;
+
+    http.begin(client, url);
+    int httpCode = http.GET();
+
+    if (httpCode == 200) {
+        String payload = http.getString();
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, payload);
+
+        if(!error) {
+             JsonObject data = doc["data"];
+             const char* st = data["summary"]["status"];
+
+             if (st) courierStatus = String(st);
+             else courierStatus = "NOT FOUND";
+
+             JsonArray history = data["history"];
+             if(history.size() > 0) {
+                 const char* loc = history[0]["location"];
+                 if(loc) courierLastLoc = String(loc);
+                 else courierLastLoc = "TRANSIT";
+
+                 const char* date = history[0]["date"];
+                 if(date) courierDate = String(date);
+             }
+        } else {
+            courierStatus = "JSON ERR";
+        }
+    } else {
+        courierStatus = "API ERR: " + String(httpCode);
+    }
+    http.end();
+    isTracking = false;
+}
+
+// ==========================================
+// RECOVERY MODE & OTA
+// ==========================================
+WebServer server(80);
+
+const char* updatePage =
+"<style>body{background:black;color:cyan;font-family:Courier;text-align:center;margin-top:20%} .btn{background:#003333;color:white;padding:15px;border:1px solid cyan;cursor:pointer;margin-top:20px}</style>"
+"<h1>// RECOVERY SYSTEM //</h1>"
+"<form method='POST' action='/update' enctype='multipart/form-data'>"
+"<input type='file' name='update' style='color:white'><br>"
+"<input type='submit' value='FLASH FIRMWARE' class='btn'></form>";
+
+void drawHeader(String text) {
+  display.fillRect(0, 0, 128, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(5, 2); display.print(text);
+  display.setTextColor(SSD1306_WHITE);
+}
+
+void drawBar(int percent, int y) {
+  display.drawRect(10, y, 108, 8, SSD1306_WHITE);
+  int w = map(percent, 0, 100, 0, 106);
+  display.fillRect(12, y+2, w, 4, SSD1306_WHITE);
+}
+
+void runRecoveryMode() {
+  WiFi.disconnect();
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("S3-RECOVERY", "admin12345");
+
+  server.on("/", HTTP_GET, []() { server.send(200, "text/html", updatePage); });
+  server.on("/update", HTTP_POST, []() {
+    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+    delay(1000);
+    ESP.restart();
+  }, []() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      display.clearDisplay(); drawHeader("RECOVERY MODE");
+      display.setCursor(20, 30); display.print("FLASHING..."); display.display();
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) Update.printError(Serial);
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) { display.clearDisplay(); display.setCursor(40,30); display.print("DONE!"); display.display(); }
+    }
+  });
+  server.begin();
+
+  display.clearDisplay();
+  drawHeader("! RECOVERY MODE !");
+  display.setTextSize(1);
+  display.setCursor(0, 20); display.print("WiFi: S3-RECOVERY");
+  display.setCursor(0, 35); display.print("IP  : 192.168.4.1");
+  display.setCursor(0, 50); display.print("Open IP in Browser");
+  display.display();
+
+  while(true) {
+      server.handleClient();
+      delay(1);
+      // Blink LED
+      if((millis()/500)%2) digitalWrite(LED_BUILTIN, HIGH); else digitalWrite(LED_BUILTIN, LOW);
+  }
+}
+
+void checkBootloader() {
+  // Check BOOT (GPIO 0) and SELECT (GPIO 14)
+  pinMode(0, INPUT_PULLUP); // BOOT
+  // BTN_SELECT is already GPIO 14, defined macros used in setup but we need it early here
+  // We re-init pinmode just in case
+  pinMode(14, INPUT_PULLUP);
+
+  unsigned long start = millis();
+  bool enterRecovery = false;
+
+  // Show prompt for 3 seconds
+  while (millis() - start < 3000) {
+    int timeLeft = 3 - ((millis() - start) / 1000);
+
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(10, 10); display.print("HOLD [OK] TO ENTER");
+    display.setCursor(25, 20); display.print("RECOVERY MODE");
+
+    display.setTextSize(2);
+    display.setCursor(60, 35); display.print(timeLeft);
+
+    int bar = map(millis() - start, 0, 3000, 0, 100);
+    drawBar(bar, 55);
+    display.display();
+
+    // Check buttons (Active LOW)
+    if (digitalRead(0) == LOW || digitalRead(14) == LOW) {
+        enterRecovery = true;
+        break;
+    }
+    delay(10);
+  }
+
+  if (enterRecovery) {
+      runRecoveryMode();
+  }
 }
 
 void stopWifiTools() {
@@ -1386,7 +1984,6 @@ void handleKeyPress();
 void handlePasswordKeyPress();
 void handleBackButton();
 void connectToWiFi(String ssid, String password);
-void scanWiFiNetworks();
 void displayResponse();
 void showStatus(String message, int delayMs);
 void forgetNetwork();
@@ -1426,6 +2023,10 @@ void refreshCurrentScreen() {
     case STATE_TOOL_DETECTOR: drawDetector(); break;
     case STATE_DEAUTH_SELECT: drawDeauthSelect(x_offset); break;
     case STATE_TOOL_DEAUTH: drawDeauthTool(); break;
+    case STATE_TOOL_PROBE_SNIFFER: drawProbeSniffer(); break;
+    case STATE_TOOL_BLE_MENU: drawBLEMenu(x_offset); break;
+    case STATE_TOOL_BLE_RUN: drawBLERun(); break;
+    case STATE_TOOL_COURIER: drawCourierTool(); break;
     // Game states handle their own drawing, so no call here
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
@@ -1532,84 +2133,18 @@ void ledQuickFlash() {
 }
 
 void showBootScreen() {
-  const char* bootLogs[] = {
-    "> INIT KERNEL... [OK]",
-    "> CPU: ESP32-S3 @240MHz",
-    "> MEM: PSRAM DETECTED",
-    "> FS: MOUNTING... [OK]",
-    "> SECURITY: BYPASS...",
-    "> NET: SCANNING... [UP]",
-    "> AI CORE: ONLINE",
-    "> GPU: I2C SYNC... [OK]",
-    "> ACCESS GRANTED"
-  };
-
-  display.setFont(&Org_01);
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-
-  int totalLogs = 9;
-  int lineHeight = 7;
-  int maxLines = 7;
-
-  // Typewriter effect variables
-  for (int i = 0; i < totalLogs; i++) {
-    String currentLine = bootLogs[i];
-    int len = currentLine.length();
-
-    // Type out the current line
-    for (int charIdx = 0; charIdx <= len; charIdx++) {
-      display.clearDisplay();
-
-      // Draw previous lines (scrolling)
-      int startIdx = (i >= maxLines) ? (i - maxLines + 1) : 0;
-      for (int j = startIdx; j < i; j++) {
-        display.setCursor(0, 6 + (j - startIdx) * lineHeight);
-        display.println(bootLogs[j]);
-      }
-
-      // Draw current line being typed
-      if (i >= startIdx) {
-        display.setCursor(0, 6 + (i - startIdx) * lineHeight);
-        display.print(currentLine.substring(0, charIdx));
-        // Blinking cursor
-        if ((millis() / 100) % 2 == 0) {
-            display.print("_");
-        }
-      }
-
-      // Progress Bar
-      int totalProgress = map(i * 100 + map(charIdx, 0, len, 0, 100), 0, totalLogs * 100, 5, 120);
-      display.drawRect(2, 58, 124, 4, SSD1306_WHITE);
-
-      // Glitch fill
-      if (random(0, 10) > 1) {
-          display.fillRect(4, 59, totalProgress, 2, SSD1306_WHITE);
-      } else {
-          // Glitch empty
-          display.fillRect(4, 59, max(0, totalProgress - 5), 2, SSD1306_WHITE);
-      }
-
-      display.display();
-
-      // Typing speed (fast)
-      delay(random(5, 20));
-    }
-
-    // Slight pause after each line
-    delay(100);
-  }
-
-  // Final "ACCESS GRANTED" Flash
-  for(int k=0; k<3; k++) {
-     display.invertDisplay(true);
-     delay(50);
-     display.invertDisplay(false);
-     delay(50);
-  }
-
-  display.setFont(NULL); // Reset to default font
   display.clearDisplay();
+
+  // Draw the new boot logo
+  display.drawBitmap(0, 0, epd_bitmap_09f6b70b000f29d19836dcd2ede0b6e8, 128, 64, SSD1306_WHITE);
+  display.display();
+
+  // Hold the boot screen for 3 seconds
+  delay(3000);
+
+  // Fade out effect (optional, or just clear)
+  display.clearDisplay();
+  display.display();
 }
 
 void setup() {
@@ -1692,6 +2227,9 @@ void setup() {
 
   // Show cinematic boot screen (WiFi connects in background during this)
   showBootScreen();
+
+  // Check for Recovery Mode entry
+  checkBootloader();
 
   if (pinLockEnabled) {
       inputPin = "";
@@ -1809,6 +2347,8 @@ void loop() {
 
   if (currentState == STATE_TOOL_SPAMMER) updateSpammer();
   if (currentState == STATE_TOOL_DETECTOR) updateDetector();
+  if (currentState == STATE_TOOL_PROBE_SNIFFER) updateProbeSniffer();
+  if (currentState == STATE_TOOL_BLE_RUN) updateBLESpam();
 
   if (currentState == STATE_VIDEO_PLAYER) {
     drawVideoPlayer();
@@ -3766,68 +4306,150 @@ void handleAPISelectSelect() {
 
 // ========== MAIN MENU ==========
 
+// ================================================================
+// UI OVERHAUL: NET-RUNNER SPLIT MENU
+// ================================================================
+
 void showMainMenu(int x_offset) {
   display.clearDisplay();
-  
+
+  // --- DATA MENU ---
+  // Kita definisikan ulang di sini biar rapi
   struct MenuItem {
-    const char* text;
+    const char* title;
+    const char* subtitle;
     const unsigned char* icon;
   };
-  
-  MenuItem menuItems[] = {
-    {"Chat AI", ICON_CHAT},
-    {"WiFi", ICON_WIFI},
-    {"Games", ICON_GAME},
-    {"Video", ICON_VIDEO},
-    {"System", ICON_SYSTEM}
+
+  MenuItem items[] = {
+    {"AI CHAT",   "GEMINI INTEL",  ICON_CHAT},
+    {"WIFI MGR",  "SCAN/ATTACK",   ICON_WIFI},
+    {"GAMES",     "ARCADE ZONE",   ICON_GAME},
+    {"VIDEO",     "BAD APPLE",     ICON_VIDEO},
+    {"COURIER",   "LIVE TRACK",    ICON_TRUCK},
+    {"SYSTEM",    "DEVICE INFO",   ICON_SYSTEM}
   };
+  int numItems = 6;
+
+  // --- BAGIAN 1: SIDEBAR (KIRI) ---
+  int sidebarWidth = 26;
   
-  int numItems = sizeof(menuItems) / sizeof(MenuItem);
-  int screenCenterY = SCREEN_HEIGHT / 2;
+  // Garis pemisah sidebar
+  display.drawLine(sidebarWidth + x_offset, 0, sidebarWidth + x_offset, SCREEN_HEIGHT, SSD1306_WHITE);
+
+  // Scroll Sidebar Logic
+  int sidebarScrollY = 0;
+  if (menuSelection > 3) {
+      sidebarScrollY = (menuSelection - 3) * 12;
+  }
   
-  // Custom Modern Card Carousel
+  // Render Ikon Sidebar
   for (int i = 0; i < numItems; i++) {
-    float itemY = screenCenterY + (i * 24) - menuScrollY; // Spacing 24
-    float distance = abs(itemY - screenCenterY);
+    int y = 4 + (i * 12) - sidebarScrollY; // Jarak antar ikon
     
-    if (itemY > -24 && itemY < SCREEN_HEIGHT + 24) {
-      if (i == menuSelection) {
-        // Selected Item (Big Card)
-        int cardY = screenCenterY - 12;
-        // Shadow
-        display.fillRoundRect(x_offset + 6, cardY + 2, SCREEN_WIDTH - 12, 24, 6, SSD1306_WHITE);
-        // Main Box Inverted
-        display.fillRoundRect(x_offset + 4, cardY, SCREEN_WIDTH - 8, 24, 6, SSD1306_BLACK);
-        display.drawRoundRect(x_offset + 4, cardY, SCREEN_WIDTH - 8, 24, 6, SSD1306_WHITE);
-
-        // Icon
-        drawIcon(x_offset + 12, cardY + 8, menuItems[i].icon);
-
-        // Text
-        display.setTextColor(SSD1306_WHITE);
-        display.setTextSize(2);
-        display.setCursor(x_offset + 30, cardY + 5);
-        display.print(menuItems[i].text);
-
-        // Arrows
-        display.setTextSize(1);
-        if(i > 0) { display.setCursor(x_offset + SCREEN_WIDTH/2 - 3, cardY - 8); display.print("^"); }
-        if(i < numItems -1) { display.setCursor(x_offset + SCREEN_WIDTH/2 - 3, cardY + 26); display.print("v"); }
-
-      } else {
-        // Other items (Dimmed/Smaller)
-        float scale = max(0.5f, 1.0f - (distance / 100.0f));
-        int itemX = x_offset + 25;
-
-        display.setTextColor(SSD1306_WHITE);
-        display.setTextSize(1);
-        display.setCursor(itemX, itemY - 3);
-        display.print(menuItems[i].text);
-      }
+    // Only draw if visible
+    if (y > -8 && y < SCREEN_HEIGHT) {
+        if (i == menuSelection) {
+          // Kotak Seleksi (Inverted) di Sidebar
+          display.fillRect(0 + x_offset, y - 2, sidebarWidth, 11, SSD1306_WHITE);
+          // Gambar Ikon Hitam (Inverted)
+          display.drawBitmap(9 + x_offset, y, items[i].icon, 8, 8, SSD1306_BLACK);
+          // Indikator panah kecil
+          display.drawPixel(2 + x_offset, y + 3, SSD1306_BLACK);
+          display.drawPixel(3 + x_offset, y + 4, SSD1306_BLACK);
+          display.drawPixel(2 + x_offset, y + 5, SSD1306_BLACK);
+        } else {
+          // Ikon Putih Normal
+          display.drawBitmap(9 + x_offset, y, items[i].icon, 8, 8, SSD1306_WHITE);
+        }
     }
   }
 
-  drawStatusBar();
+  // --- BAGIAN 2: CONTENT AREA (KANAN) ---
+  int contentX = sidebarWidth + 4 + x_offset;
+
+  // Header Box
+  display.fillRect(contentX, 0, 100, 10, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(1);
+  display.setCursor(contentX + 2, 1);
+  display.print("MODE: ");
+  display.print(items[menuSelection].title); // Judul Menu Terpilih
+
+  display.setTextColor(SSD1306_WHITE);
+
+  // Subtitle / Deskripsi
+  display.setCursor(contentX, 15);
+  display.print(">> ");
+  display.print(items[menuSelection].subtitle);
+
+  // --- BAGIAN 3: WIDGET VISUAL (BIAR CANGGIH) ---
+  // Kita gambar grafik/kotak info beda-beda tergantung menu yang dipilih
+
+  int widgetY = 30;
+  display.drawRect(contentX, widgetY, 94, 32, SSD1306_WHITE); // Frame Widget
+
+  if (menuSelection == 0) {
+    // Tampilan CHAT AI: Gelombang Suara Palsu
+    display.setCursor(contentX + 2, widgetY + 2); display.print("VOICE_LINK:");
+    for (int i = 0; i < 80; i+=3) {
+      int h = random(2, 15);
+      display.drawLine(contentX + 2 + i, widgetY + 25, contentX + 2 + i, widgetY + 25 - h, SSD1306_WHITE);
+    }
+  }
+  else if (menuSelection == 1) {
+    // Tampilan WIFI: Grafik Sinyal & Data Packet
+    display.setCursor(contentX + 2, widgetY + 2); display.print("AIR_TRAFFIC:");
+    // Grafik garis acak
+    int prevY = 0;
+    for (int i = 0; i < 80; i+=5) {
+      int newY = random(0, 15);
+      display.drawLine(contentX + i, widgetY + 28 - prevY, contentX + i + 5, widgetY + 28 - newY, SSD1306_WHITE);
+      prevY = newY;
+    }
+  }
+  else if (menuSelection == 4) {
+    // Tampilan COURIER: Peta Mini
+    display.setCursor(contentX + 2, widgetY + 2); display.print("TRACKING:");
+    // Draw simple map path
+    display.drawLine(contentX + 10, widgetY + 25, contentX + 30, widgetY + 15, SSD1306_WHITE);
+    display.drawLine(contentX + 30, widgetY + 15, contentX + 60, widgetY + 20, SSD1306_WHITE);
+    display.fillCircle(contentX + 10, widgetY + 25, 2, SSD1306_WHITE); // Start
+    display.fillCircle(contentX + 60, widgetY + 20, 2, SSD1306_WHITE); // End
+    // Blink curr pos
+    if((millis()/500)%2) display.drawCircle(contentX + 30, widgetY + 15, 3, SSD1306_WHITE);
+  }
+  else if (menuSelection == 5) {
+    // Tampilan SYSTEM: Memory Block
+    display.setCursor(contentX + 2, widgetY + 2); display.print("MEM_DUMP:");
+    for(int y=0; y<3; y++) {
+      for(int x=0; x<10; x++) {
+         if(random(0,2)) display.fillRect(contentX + 2 + (x*8), widgetY + 12 + (y*6), 6, 4, SSD1306_WHITE);
+         else display.drawRect(contentX + 2 + (x*8), widgetY + 12 + (y*6), 6, 4, SSD1306_WHITE);
+      }
+    }
+  }
+  else {
+    // Default: Binary Rain statis
+    display.setCursor(contentX + 2, widgetY + 2); display.print("DATA_STREAM:");
+    for(int i=0; i<30; i++) {
+        display.setCursor(contentX + 2 + (i*10) % 80, widgetY + 12 + (i/8)*8);
+        display.print(random(0,2));
+    }
+  }
+
+  // Footer Info (Status Bar Mini di Bawah)
+  display.drawLine(contentX, 54, 128, 54, SSD1306_WHITE);
+  display.setCursor(contentX, 56);
+
+  // Jam / Uptime
+  if (cachedTimeStr.length() > 0) display.print(cachedTimeStr);
+  else { display.print("T:"); display.print(millis()/1000); }
+
+  // Battery / Power (Fake Indicator)
+  display.setCursor(100, 56);
+  display.print("PWR:OK");
+
   display.display();
 }
 
@@ -3852,7 +4474,10 @@ void handleMainMenuSelect() {
       videoCurrentFrame = 0;
       changeState(STATE_VIDEO_PLAYER);
       break;
-    case 4: // System Info
+    case 4: // Courier
+      changeState(STATE_TOOL_COURIER);
+      break;
+    case 5: // System Info
       systemMenuSelection = 0;
       changeState(STATE_SYSTEM_MENU);
       break;
@@ -4012,11 +4637,15 @@ void showSystemToolsMenu(int x_offset) {
     "I2C Benchmark",
     "SSID Spammer",
     "Deauth Detect",
+    "Probe Sniffer",
     "WiFi Deauther",
+    "BLE Spammer",
+    "Courier Check",
+    "Recovery Mode",
     "Reboot System",
     "Back"
   };
-  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 7, systemMenuSelection, &systemMenuScrollY);
+  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 11, systemMenuSelection, &systemMenuScrollY);
 }
 
 void handleSystemMenuSelect() {
@@ -4084,9 +4713,23 @@ void handleSystemToolsMenuSelect() {
       changeState(STATE_TOOL_DETECTOR);
       break;
     case 4:
-      scanForDeauth();
+      initProbeSniffer();
+      changeState(STATE_TOOL_PROBE_SNIFFER);
       break;
     case 5:
+      scanForDeauth();
+      break;
+    case 6:
+      menuSelection = 0;
+      changeState(STATE_TOOL_BLE_MENU);
+      break;
+    case 7:
+      changeState(STATE_TOOL_COURIER);
+      break;
+    case 8:
+      runRecoveryMode();
+      break;
+    case 9:
       display.clearDisplay();
       display.setCursor(30, 30);
       display.print("Rebooting...");
@@ -4094,7 +4737,7 @@ void handleSystemToolsMenuSelect() {
       delay(500);
       ESP.restart();
       break;
-    case 6: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
+    case 10: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
   }
 }
 
@@ -4534,6 +5177,9 @@ void handleKeyPress() {
   if (strcmp(key, "OK") == 0) {
     if (keyboardContext == CONTEXT_CHAT) {
       sendToGemini();
+    } else if (keyboardContext == CONTEXT_BLE_NAME) {
+      bleTargetName = userInput;
+      changeState(STATE_TOOL_BLE_MENU);
     }
   } else if (strcmp(key, "<") == 0) {
     if (userInput.length() > 0) {
@@ -4624,6 +5270,9 @@ void handleUp() {
         }
       }
       break;
+    case STATE_TOOL_BLE_MENU:
+      if (menuSelection > 0) menuSelection--;
+      break;
     case STATE_API_SELECT:
       if (menuSelection > 0) {
         menuSelection--;
@@ -4659,7 +5308,7 @@ void handleUp() {
 void handleDown() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      if (menuSelection < 4) {
+      if (menuSelection < 5) {
         menuSelection++;
         menuTargetScrollY = menuSelection * 22;
         menuTextScrollX = 0;
@@ -4706,7 +5355,7 @@ void handleDown() {
       if (systemMenuSelection < 6) systemMenuSelection++;
       break;
     case STATE_SYSTEM_SUB_TOOLS:
-      if (systemMenuSelection < 6) systemMenuSelection++;
+      if (systemMenuSelection < 10) systemMenuSelection++;
       break;
     case STATE_DEAUTH_SELECT:
       if (selectedNetwork < networkCount - 1) {
@@ -4715,6 +5364,9 @@ void handleDown() {
           wifiPage++;
         }
       }
+      break;
+    case STATE_TOOL_BLE_MENU:
+      if (menuSelection < 3) menuSelection++;
       break;
     case STATE_API_SELECT:
       if (menuSelection < 1) {
@@ -4867,6 +5519,12 @@ void handleSelect() {
           showStatus("Saved!", 1000);
           changeState(STATE_SYSTEM_MENU);
       }
+      break;
+    case STATE_TOOL_BLE_MENU:
+      handleBLEMenuSelect();
+      break;
+    case STATE_TOOL_COURIER:
+      checkResiReal();
       break;
     case STATE_API_SELECT:
       handleAPISelectSelect();
@@ -5027,6 +5685,7 @@ void handleBackButton() {
       break;
     case STATE_TOOL_SPAMMER:
     case STATE_TOOL_DETECTOR:
+    case STATE_TOOL_PROBE_SNIFFER:
       stopWifiTools();
       changeState(STATE_SYSTEM_SUB_TOOLS);
       break;
@@ -5036,6 +5695,18 @@ void handleBackButton() {
     case STATE_TOOL_DEAUTH:
       stop_deauth();
       changeState(STATE_DEAUTH_SELECT);
+      break;
+    case STATE_TOOL_BLE_MENU:
+      changeState(STATE_SYSTEM_SUB_TOOLS);
+      break;
+    case STATE_TOOL_BLE_RUN:
+      stopBLESpam();
+      display.invertDisplay(false);
+      changeState(STATE_TOOL_BLE_MENU);
+      break;
+    case STATE_TOOL_COURIER:
+      if (previousState == STATE_MAIN_MENU) changeState(STATE_MAIN_MENU);
+      else changeState(STATE_SYSTEM_SUB_TOOLS);
       break;
 
     default:
