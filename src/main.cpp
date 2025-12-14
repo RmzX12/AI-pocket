@@ -1744,9 +1744,9 @@ void drawBLERun() {
 }
 
 // --- COURIER TRACKER LOGIC ---
-String rajaOngkirApiKey = "YOUR_API_KEY_HERE";
+String rajaOngkirApiKey = RAJAONGKIR_API_KEY;
 String courierType = "jnt";
-String courierResi = "JX123456789";
+String courierResi = DEFAULT_COURIER_RESI;
 String courierStatus = "Ready";
 String courierLastLoc = "-";
 
