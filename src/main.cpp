@@ -1642,7 +1642,15 @@ void updateBLESpam() {
 
   BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
   oAdvertisementData.setFlags(0x04);
-  oAdvertisementData.setManufacturerData(std::string(swiftPairPayload, 7));
+
+  #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    String manuData = "";
+    for(int i=0; i<7; i++) manuData += (char)swiftPairPayload[i];
+    oAdvertisementData.setManufacturerData(manuData);
+  #else
+    oAdvertisementData.setManufacturerData(std::string(swiftPairPayload, 7));
+  #endif
+
   oAdvertisementData.setName(currentName.c_str());
 
   // Note: BLEDevice::init(name) sets the local device name.
