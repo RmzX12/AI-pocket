@@ -1625,22 +1625,8 @@ void setupBLE(String name) {
 
 void updateBLESpam() {
   String currentName = bleTargetName;
-  bool shouldUpdate = false;
-
-  // In random mode, we update every iteration
   if (bleSpamRandomMode) {
-      currentName = generateRandomSSID(); // Reuse SSID spammer names
-      shouldUpdate = true;
-  } else {
-      // In static mode, we only start once.
-      // If already running, do nothing (to avoid stop/start flickering/inefficiency)
-      if (!pAdvertising) shouldUpdate = true;
-  }
-
-  // If already running and static mode, just return
-  if (!shouldUpdate && pAdvertising) {
-      delay(100);
-      return;
+      currentName = generateRandomSSID();
   }
 
   // Swift Pair Payload
@@ -1656,10 +1642,10 @@ void updateBLESpam() {
   oAdvertisementData.setFlags(0x04);
 
   #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-    String manuData = "";
-    for(int i=0; i<7; i++) manuData += (char)swiftPairPayload[i];
-    oAdvertisementData.setManufacturerData(manuData);
+    // Use String constructor for binary data
+    oAdvertisementData.setManufacturerData(String(swiftPairPayload, 7));
   #else
+    // Use std::string for v2
     oAdvertisementData.setManufacturerData(std::string(swiftPairPayload, 7));
   #endif
 
@@ -5224,7 +5210,7 @@ void handleDown() {
       if (systemMenuSelection < 6) systemMenuSelection++;
       break;
     case STATE_SYSTEM_SUB_TOOLS:
-      if (systemMenuSelection < 6) systemMenuSelection++;
+      if (systemMenuSelection < 9) systemMenuSelection++;
       break;
     case STATE_DEAUTH_SELECT:
       if (selectedNetwork < networkCount - 1) {
