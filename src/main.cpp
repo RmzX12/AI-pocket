@@ -4095,68 +4095,129 @@ void handleAPISelectSelect() {
 
 // ========== MAIN MENU ==========
 
+// ================================================================
+// UI OVERHAUL: NET-RUNNER SPLIT MENU
+// ================================================================
+
 void showMainMenu(int x_offset) {
   display.clearDisplay();
-  
+
+  // --- DATA MENU ---
+  // Kita definisikan ulang di sini biar rapi
   struct MenuItem {
-    const char* text;
+    const char* title;
+    const char* subtitle;
     const unsigned char* icon;
   };
-  
-  MenuItem menuItems[] = {
-    {"Chat AI", ICON_CHAT},
-    {"WiFi", ICON_WIFI},
-    {"Games", ICON_GAME},
-    {"Video", ICON_VIDEO},
-    {"System", ICON_SYSTEM}
+
+  MenuItem items[] = {
+    {"AI CHAT",   "GEMINI INTEL",  ICON_CHAT},
+    {"WIFI MGR",  "SCAN/ATTACK",   ICON_WIFI},
+    {"GAMES",     "ARCADE ZONE",   ICON_GAME},
+    {"VIDEO",     "BAD APPLE",     ICON_VIDEO},
+    {"SYSTEM",    "DEVICE INFO",   ICON_SYSTEM}
   };
+  int numItems = 5;
+
+  // --- BAGIAN 1: SIDEBAR (KIRI) ---
+  int sidebarWidth = 26;
   
-  int numItems = sizeof(menuItems) / sizeof(MenuItem);
-  int screenCenterY = SCREEN_HEIGHT / 2;
+  // Garis pemisah sidebar
+  display.drawLine(sidebarWidth + x_offset, 0, sidebarWidth + x_offset, SCREEN_HEIGHT, SSD1306_WHITE);
   
-  // Custom Modern Card Carousel
+  // Render Ikon Sidebar
   for (int i = 0; i < numItems; i++) {
-    float itemY = screenCenterY + (i * 24) - menuScrollY; // Spacing 24
-    float distance = abs(itemY - screenCenterY);
+    int y = 4 + (i * 12); // Jarak antar ikon
     
-    if (itemY > -24 && itemY < SCREEN_HEIGHT + 24) {
-      if (i == menuSelection) {
-        // Selected Item (Big Card)
-        int cardY = screenCenterY - 12;
-        // Shadow
-        display.fillRoundRect(x_offset + 6, cardY + 2, SCREEN_WIDTH - 12, 24, 6, SSD1306_WHITE);
-        // Main Box Inverted
-        display.fillRoundRect(x_offset + 4, cardY, SCREEN_WIDTH - 8, 24, 6, SSD1306_BLACK);
-        display.drawRoundRect(x_offset + 4, cardY, SCREEN_WIDTH - 8, 24, 6, SSD1306_WHITE);
-
-        // Icon
-        drawIcon(x_offset + 12, cardY + 8, menuItems[i].icon);
-
-        // Text
-        display.setTextColor(SSD1306_WHITE);
-        display.setTextSize(2);
-        display.setCursor(x_offset + 30, cardY + 5);
-        display.print(menuItems[i].text);
-
-        // Arrows
-        display.setTextSize(1);
-        if(i > 0) { display.setCursor(x_offset + SCREEN_WIDTH/2 - 3, cardY - 8); display.print("^"); }
-        if(i < numItems -1) { display.setCursor(x_offset + SCREEN_WIDTH/2 - 3, cardY + 26); display.print("v"); }
-
-      } else {
-        // Other items (Dimmed/Smaller)
-        float scale = max(0.5f, 1.0f - (distance / 100.0f));
-        int itemX = x_offset + 25;
-
-        display.setTextColor(SSD1306_WHITE);
-        display.setTextSize(1);
-        display.setCursor(itemX, itemY - 3);
-        display.print(menuItems[i].text);
-      }
+    if (i == mainMenuSelection) {
+      // Kotak Seleksi (Inverted) di Sidebar
+      display.fillRect(0 + x_offset, y - 2, sidebarWidth, 11, SSD1306_WHITE);
+      // Gambar Ikon Hitam (Inverted)
+      display.drawBitmap(9 + x_offset, y, items[i].icon, 8, 8, SSD1306_BLACK);
+      // Indikator panah kecil
+      display.drawPixel(2 + x_offset, y + 3, SSD1306_BLACK);
+      display.drawPixel(3 + x_offset, y + 4, SSD1306_BLACK);
+      display.drawPixel(2 + x_offset, y + 5, SSD1306_BLACK);
+    } else {
+      // Ikon Putih Normal
+      display.drawBitmap(9 + x_offset, y, items[i].icon, 8, 8, SSD1306_WHITE);
     }
   }
 
-  drawStatusBar();
+  // --- BAGIAN 2: CONTENT AREA (KANAN) ---
+  int contentX = sidebarWidth + 4 + x_offset;
+
+  // Header Box
+  display.fillRect(contentX, 0, 100, 10, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(1);
+  display.setCursor(contentX + 2, 1);
+  display.print("MODE: ");
+  display.print(items[mainMenuSelection].title); // Judul Menu Terpilih
+
+  display.setTextColor(SSD1306_WHITE);
+
+  // Subtitle / Deskripsi
+  display.setCursor(contentX, 15);
+  display.print(">> ");
+  display.print(items[mainMenuSelection].subtitle);
+
+  // --- BAGIAN 3: WIDGET VISUAL (BIAR CANGGIH) ---
+  // Kita gambar grafik/kotak info beda-beda tergantung menu yang dipilih
+
+  int widgetY = 30;
+  display.drawRect(contentX, widgetY, 94, 32, SSD1306_WHITE); // Frame Widget
+
+  if (mainMenuSelection == 0) {
+    // Tampilan CHAT AI: Gelombang Suara Palsu
+    display.setCursor(contentX + 2, widgetY + 2); display.print("VOICE_LINK:");
+    for (int i = 0; i < 80; i+=3) {
+      int h = random(2, 15);
+      display.drawLine(contentX + 2 + i, widgetY + 25, contentX + 2 + i, widgetY + 25 - h, SSD1306_WHITE);
+    }
+  }
+  else if (mainMenuSelection == 1) {
+    // Tampilan WIFI: Grafik Sinyal & Data Packet
+    display.setCursor(contentX + 2, widgetY + 2); display.print("AIR_TRAFFIC:");
+    // Grafik garis acak
+    int prevY = 0;
+    for (int i = 0; i < 80; i+=5) {
+      int newY = random(0, 15);
+      display.drawLine(contentX + i, widgetY + 28 - prevY, contentX + i + 5, widgetY + 28 - newY, SSD1306_WHITE);
+      prevY = newY;
+    }
+  }
+  else if (mainMenuSelection == 4) {
+    // Tampilan SYSTEM: Memory Block
+    display.setCursor(contentX + 2, widgetY + 2); display.print("MEM_DUMP:");
+    for(int y=0; y<3; y++) {
+      for(int x=0; x<10; x++) {
+         if(random(0,2)) display.fillRect(contentX + 2 + (x*8), widgetY + 12 + (y*6), 6, 4, SSD1306_WHITE);
+         else display.drawRect(contentX + 2 + (x*8), widgetY + 12 + (y*6), 6, 4, SSD1306_WHITE);
+      }
+    }
+  }
+  else {
+    // Default: Binary Rain statis
+    display.setCursor(contentX + 2, widgetY + 2); display.print("DATA_STREAM:");
+    for(int i=0; i<30; i++) {
+        display.setCursor(contentX + 2 + (i*10) % 80, widgetY + 12 + (i/8)*8);
+        display.print(random(0,2));
+    }
+  }
+
+  // Footer Info (Status Bar Mini di Bawah)
+  display.drawLine(contentX, 54, 128, 54, SSD1306_WHITE);
+  display.setCursor(contentX, 56);
+
+  // Jam / Uptime
+  if (cachedTimeStr.length() > 0) display.print(cachedTimeStr);
+  else { display.print("T:"); display.print(millis()/1000); }
+
+  // Battery / Power (Fake Indicator)
+  display.setCursor(100, 56);
+  display.print("PWR:OK");
+
   display.display();
 }
 
