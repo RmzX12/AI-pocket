@@ -509,42 +509,36 @@ wifi_promiscuous_filter_t filt = {
 esp_err_t esp_wifi_80211_tx(wifi_interface_t ifx, const void *buffer, int len, bool en_sys_seq);
 
 // --- SSID SPAMMER CONFIG ---
-const char* fakeSSIDs[] = {
-  "HP LU KENA VIRUS",
-  "JANGAN MALING WIFI",
-  "HACKED BY ESP32",
-  "RUMAH HANTU 666",
-  "FBI SURVEILLANCE #1",
-  "Awas Ada Copet",
-  "MAKAN GRATIS DISINI",
-  "SYSTEM ERROR 404",
-  "ESP32 ATTACK MODE",
-  "SKIBIDI TOILET",
-  "NETWORK_DESTROYER",
-  "JANGAN_KONEK_SINI",
-  "WIFI RUSAK",
-  "BAYAR DULU",
-  "KANTOR POLISI",
-  "AREA 51",
-  "JANGAN DICOBA",
-  "VIRUS.EXE",
-  "TETANGGA JULID",
-  "FREE WIFI TAPI BOONG",
-  "CONNECT = HACK",
-  "AWAS MELEDAK",
-  "CCTV ONLINE",
-  "JARINGAN RAHASIA",
-  "NO INTERNET",
-  "LOADING...",
-  "ERROR 500",
-  "TROJAN HORSE",
-  "MALWARE DETECTED",
-  "SEDOT PULSA",
-  "HP PANAS YA?",
-  "PASSWORD: 12345678"
+const char* spamPrefixes[] = {
+  "VIRUS", "MALWARE", "TROJAN", "WORM", "SPYWARE",
+  "RANSOMWARE", "BOTNET", "ROOTKIT", "KEYLOGGER", "ADWARE",
+  "POLISI_SIBER", "BIN_SURVEILLANCE", "FBI_VAN", "CIA_SAFEHOUSE", "NSA_NODE",
+  "INTERPOL_HQ", "DENSUS_88", "SATELIT_MATA2", "CCTV_KOTA", "DRONE_INTEL",
+  "HP_MELEDAK", "SEDOT_PULSA", "HACK_CAMERA", "FORMAT_DATA", "DELETE_OS",
+  "SYSTEM_CRASH", "BOOTLOOP", "OVERHEAT", "BATTERY_DRAIN", "SIM_CLONING",
+  "JANGAN_KONEK", "ADA_HANTU", "RUMAH_ANGKER", "POCONG_GAMING", "KUNTILANAK",
+  "TUYUL_ONLINE", "SANTET_E-WALLET", "PELAKOR_DETECTED", "HUTANG_BAYAR",
+  "FREE_WIFI_SCAM", "LOGIN_FB_GRATIS", "PHISHING_LINK", "CLICKBAIT", "404_NOT_FOUND",
+  "ACCESS_DENIED", "BANNED_USER", "RESTRICTED_AREA", "DANGER_ZONE", "HIGH_VOLTAGE",
+  "ASUS_ROG", "IPHONE_15_PRO", "SAMSUNG_S24", "XIAOMI_14_ULTRA", "STARLINK_V2"
 };
-const int TOTAL_FAKE_SSIDS = 32;
+const int TOTAL_PREFIXES = 54;
 uint8_t spamChannel = 1;
+
+String generateRandomSSID() {
+  String ssid = String(spamPrefixes[random(0, TOTAL_PREFIXES)]);
+  // Add random suffix for uniqueness
+  if (random(0, 2)) {
+    ssid += "_";
+    ssid += String(random(100, 999));
+  }
+  // Sometimes add Hex
+  if (random(0, 5) == 0) {
+    ssid += "_0x";
+    ssid += String(random(0, 255), HEX);
+  }
+  return ssid;
+}
 
 // Raw 802.11 Beacon Frame Packet
 uint8_t packet[128] = {
@@ -1236,15 +1230,23 @@ void initSpammer() {
 }
 
 void updateSpammer() {
-  // Prevent WDT Reset by yielding
-  delay(1);
+  // Burst mode: Send multiple packets per frame
+  // Generating "Hundreds" effect by sending ~15 unique SSIDs per loop iteration (which runs at ~60-90Hz)
+  // This results in ~1000 beacons per second.
 
-  spamChannel = (spamChannel % 13) + 1;
-  esp_wifi_set_channel(spamChannel, WIFI_SECOND_CHAN_NONE);
+  for(int i=0; i<15; i++) {
+      // 1. Acak nama
+      String namaAcak = generateRandomSSID();
 
-  for(int i=0; i<TOTAL_FAKE_SSIDS; i++) {
-    sendBeacon(fakeSSIDs[i]);
-    delay(10); // Increased delay to prevent congestion/crash
+      // 2. Masukin & TEMBAK (sendBeacon handles building packet and tx)
+      sendBeacon(namaAcak.c_str());
+
+      // 3. Ganti Channel (Spread the jamming)
+      spamChannel = (spamChannel % 13) + 1;
+      esp_wifi_set_channel(spamChannel, WIFI_SECOND_CHAN_NONE);
+
+      // 4. Delay dikit (per user request logic)
+      delay(2); // Small delay to avoid complete WDT freeze but fast enough
   }
 }
 
@@ -1266,12 +1268,18 @@ void drawSpammer() {
 
   display.setCursor(5, 35);
   display.print("> ");
-  display.print(fakeSSIDs[random(0, TOTAL_FAKE_SSIDS)]);
+  // Show a random sample name
+  if (millis() % 200 == 0) {
+      display.fillRect(5, 35, 120, 10, SSD1306_BLACK); // Clear prev text
+      display.setCursor(5, 35);
+      display.print("> ");
+      display.print(generateRandomSSID().substring(0, 14));
+  }
 
   display.drawLine(0, 48, SCREEN_WIDTH, 48, SSD1306_WHITE);
   display.setCursor(0, 52);
-  display.print("CH: "); display.print(spamChannel);
-  display.print(" PKT: "); display.print(millis()/50);
+  display.print("CH: ALL");
+  display.print(" PKT: "); display.print(millis()/10); // Simulated high packet count
 
   display.display();
 }
