@@ -1744,92 +1744,93 @@ void drawBLERun() {
 }
 
 // --- COURIER TRACKER LOGIC ---
-String rajaOngkirApiKey = RAJAONGKIR_API_KEY;
-String courierType = "jnt";
-String courierResi = DEFAULT_COURIER_RESI;
-String courierStatus = "Ready";
+String bb_apiKey = BINDERBYTE_API_KEY;
+String bb_kurir  = BINDERBYTE_COURIER;
+String bb_resi   = DEFAULT_COURIER_RESI;
+String courierStatus = "SYSTEM READY";
 String courierLastLoc = "-";
+String courierDate = "";
+bool isTracking = false;
 
 void drawCourierTool() {
     display.clearDisplay();
-    drawStatusBar();
+    // Use the requested "BINDERBYTE OPS" header style
+    display.fillRect(0, 0, 128, 12, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+    display.setCursor(25, 2);
+    display.print("BINDERBYTE OPS");
+    display.setTextColor(SSD1306_WHITE);
 
     display.setTextSize(1);
-    display.setCursor(25, 0);
-    display.print("COURIER CHECK");
-    display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
+    display.setCursor(0, 16); display.print("RESI: "); display.print(bb_resi);
 
-    display.setCursor(0, 15);
-    display.print("RESI: "); display.print(courierResi);
+    // Status Box
+    display.drawRect(0, 26, 128, 14, SSD1306_WHITE);
+    int c = (128 - (courierStatus.length()*6)) / 2; if(c<2) c=2;
+    display.setCursor(c, 29);
+    if(isTracking && (millis()/200)%2==0) display.print("..."); else display.print(courierStatus);
 
-    display.setCursor(0, 25);
-    display.print("EXP : "); display.print(courierType);
+    // Location & Date
+    display.setCursor(0, 44); display.print("LOC: ");
+    if(courierLastLoc.length()>14) display.print(courierLastLoc.substring(0,14)); else display.print(courierLastLoc);
 
-    display.drawLine(0, 35, SCREEN_WIDTH, 35, SSD1306_WHITE);
+    display.setCursor(0, 54); display.print("TGL: ");
+    if(courierDate.length()>0) display.print(courierDate.substring(0,16));
 
-    display.setCursor(0, 38);
-    display.print("STS: "); display.print(courierStatus);
-
-    display.setCursor(0, 48);
-    String loc = courierLastLoc;
-    if(loc.length() > 21) loc = loc.substring(0, 21);
-    display.print(loc);
-
-    display.setCursor(0, 56);
-    display.print("[SEL] CHECK");
+    // Indikator OTA Ready (Titik di pojok)
+    if((millis()/1000)%2==0) display.fillCircle(124, 60, 2, SSD1306_WHITE);
 
     display.display();
 }
 
 void checkResiReal() {
     if(WiFi.status() != WL_CONNECTED) {
-        courierStatus = "No WiFi!";
+        courierStatus = "NO WIFI";
         return;
     }
 
-    courierStatus = "Checking...";
+    isTracking = true;
+    courierStatus = "FETCHING...";
     drawCourierTool(); // Force update
-    display.display();
+
+    WiFiClientSecure client;
+    client.setInsecure(); // Bypass SSL Certificate Check
 
     HTTPClient http;
-    http.begin("https://api.rajaongkir.com/starter/waybill");
-    http.addHeader("key", rajaOngkirApiKey);
-    http.addHeader("content-type", "application/x-www-form-urlencoded");
+    String url = "https://api.binderbyte.com/v1/track?api_key=" + bb_apiKey + "&courier=" + bb_kurir + "&awb=" + bb_resi;
 
-    String body = "waybill=" + courierResi + "&courier=" + courierType;
-    int httpCode = http.POST(body);
+    http.begin(client, url);
+    int httpCode = http.GET();
 
-    if(httpCode > 0) {
+    if (httpCode == 200) {
         String payload = http.getString();
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, payload);
 
         if(!error) {
-             JsonObject raja = doc["rajaongkir"];
-             int status = raja["status"]["code"];
-             if(status == 200) {
-                 String delivery = raja["result"]["delivery_status"]["status"];
-                 courierStatus = delivery;
+             JsonObject data = doc["data"];
+             const char* st = data["summary"]["status"];
 
-                 JsonArray manifest = raja["result"]["manifest"];
-                 if(manifest.size() > 0) {
-                     String city = manifest[0]["city_name"];
-                     String desc = manifest[0]["manifest_description"];
-                     courierLastLoc = "[" + city + "] " + desc;
-                 } else {
-                     courierLastLoc = "No History";
-                 }
-             } else {
-                 String err = raja["status"]["description"];
-                 courierStatus = err;
+             if (st) courierStatus = String(st);
+             else courierStatus = "NOT FOUND";
+
+             JsonArray history = data["history"];
+             if(history.size() > 0) {
+                 const char* loc = history[0]["location"];
+                 if(loc) courierLastLoc = String(loc);
+                 else courierLastLoc = "TRANSIT";
+
+                 const char* date = history[0]["date"];
+                 if(date) courierDate = String(date);
              }
         } else {
-            courierStatus = "JSON Error";
+            courierStatus = "JSON ERR";
         }
     } else {
-        courierStatus = "HTTP Error";
+        courierStatus = "API ERR: " + String(httpCode);
     }
     http.end();
+    isTracking = false;
 }
 
 void stopWifiTools() {
@@ -4223,23 +4224,32 @@ void showMainMenu(int x_offset) {
   
   // Garis pemisah sidebar
   display.drawLine(sidebarWidth + x_offset, 0, sidebarWidth + x_offset, SCREEN_HEIGHT, SSD1306_WHITE);
+
+  // Scroll Sidebar Logic
+  int sidebarScrollY = 0;
+  if (menuSelection > 3) {
+      sidebarScrollY = (menuSelection - 3) * 12;
+  }
   
   // Render Ikon Sidebar
   for (int i = 0; i < numItems; i++) {
-    int y = 4 + (i * 12); // Jarak antar ikon
+    int y = 4 + (i * 12) - sidebarScrollY; // Jarak antar ikon
     
-    if (i == menuSelection) {
-      // Kotak Seleksi (Inverted) di Sidebar
-      display.fillRect(0 + x_offset, y - 2, sidebarWidth, 11, SSD1306_WHITE);
-      // Gambar Ikon Hitam (Inverted)
-      display.drawBitmap(9 + x_offset, y, items[i].icon, 8, 8, SSD1306_BLACK);
-      // Indikator panah kecil
-      display.drawPixel(2 + x_offset, y + 3, SSD1306_BLACK);
-      display.drawPixel(3 + x_offset, y + 4, SSD1306_BLACK);
-      display.drawPixel(2 + x_offset, y + 5, SSD1306_BLACK);
-    } else {
-      // Ikon Putih Normal
-      display.drawBitmap(9 + x_offset, y, items[i].icon, 8, 8, SSD1306_WHITE);
+    // Only draw if visible
+    if (y > -8 && y < SCREEN_HEIGHT) {
+        if (i == menuSelection) {
+          // Kotak Seleksi (Inverted) di Sidebar
+          display.fillRect(0 + x_offset, y - 2, sidebarWidth, 11, SSD1306_WHITE);
+          // Gambar Ikon Hitam (Inverted)
+          display.drawBitmap(9 + x_offset, y, items[i].icon, 8, 8, SSD1306_BLACK);
+          // Indikator panah kecil
+          display.drawPixel(2 + x_offset, y + 3, SSD1306_BLACK);
+          display.drawPixel(3 + x_offset, y + 4, SSD1306_BLACK);
+          display.drawPixel(2 + x_offset, y + 5, SSD1306_BLACK);
+        } else {
+          // Ikon Putih Normal
+          display.drawBitmap(9 + x_offset, y, items[i].icon, 8, 8, SSD1306_WHITE);
+        }
     }
   }
 
