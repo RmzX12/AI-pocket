@@ -2589,7 +2589,7 @@ void loop() {
           if (menuSelection < 2) menuSelection++;
           break;
         case STATE_ESPNOW_MENU:
-          if (menuSelection < 3) menuSelection++;
+          if (menuSelection < 5) menuSelection++;
           break;
         case STATE_WIFI_SCAN:
           if (selectedNetwork < networkCount - 1) {
