@@ -79,7 +79,8 @@ enum AppState {
   STATE_TOOL_COURIER,
   STATE_ESPNOW_CHAT,
   STATE_ESPNOW_MENU,
-  STATE_ESPNOW_PEER_SCAN
+  STATE_ESPNOW_PEER_SCAN,
+  STATE_VPET
 };
 
 AppState currentState = STATE_BOOT;
@@ -266,6 +267,18 @@ int chatMessageCount = 0;
 String userProfile = "";
 String chatSummary = "";
 
+// ============ VIRTUAL PET DATA ============
+struct VirtualPet {
+  float hunger;    // 0-100 (100 = Full)
+  float happiness; // 0-100 (100 = Happy)
+  float energy;    // 0-100 (100 = Rested)
+  unsigned long lastUpdate;
+  bool isSleeping;
+};
+
+VirtualPet myPet = {100.0f, 100.0f, 100.0f, 0, false};
+int petMenuSelection = 0; // 0:Feed, 1:Play, 2:Sleep, 3:Back
+
 // ============ CONVERSATION CONTEXT STRUCTURE ============
 struct ConversationContext {
   String fullHistory;
@@ -342,6 +355,9 @@ void addESPNowPeer(const uint8_t *mac, String nickname, int rssi);
 void drawESPNowChat();
 void drawESPNowMenu();
 void drawESPNowPeerList();
+void drawPetGame();
+void loadPetData();
+void savePetData();
 String getRecentChatContext(int maxMessages);
 
 const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -623,6 +639,160 @@ void drawESPNowChat() {
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
   canvas.print("SELECT=Type | UP/DN=Scroll | L+R=Back");
   
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ VIRTUAL PET LOGIC & DRAWING ============
+void loadPetData() {
+  preferences.begin("pet-data", true);
+  myPet.hunger = preferences.getFloat("hunger", 80.0f);
+  myPet.happiness = preferences.getFloat("happy", 80.0f);
+  myPet.energy = preferences.getFloat("energy", 80.0f);
+  myPet.isSleeping = preferences.getBool("sleep", false);
+  preferences.end();
+}
+
+void savePetData() {
+  preferences.begin("pet-data", false);
+  preferences.putFloat("hunger", myPet.hunger);
+  preferences.putFloat("happy", myPet.happiness);
+  preferences.putFloat("energy", myPet.energy);
+  preferences.putBool("sleep", myPet.isSleeping);
+  preferences.end();
+}
+
+void updatePetLogic() {
+  unsigned long now = millis();
+  if (now - myPet.lastUpdate >= 5000) { // Update every 5 seconds
+    float decay = 0.5f; // Base decay
+
+    if (myPet.isSleeping) {
+      myPet.energy += 2.0f; // Recover energy
+      myPet.hunger -= 0.8f; // Get hungry slower
+    } else {
+      myPet.energy -= 0.5f;
+      myPet.hunger -= 1.0f;
+      myPet.happiness -= 0.5f;
+    }
+
+    // Clamp values
+    myPet.energy = constrain(myPet.energy, 0.0f, 100.0f);
+    myPet.hunger = constrain(myPet.hunger, 0.0f, 100.0f);
+    myPet.happiness = constrain(myPet.happiness, 0.0f, 100.0f);
+
+    // Auto wake up if full energy
+    if (myPet.isSleeping && myPet.energy >= 100.0f) {
+      myPet.isSleeping = false;
+      showStatus("Pet Woke Up!", 1000);
+    }
+
+    myPet.lastUpdate = now;
+    if (now % 30000 < 5000) savePetData(); // Auto save occasionally
+  }
+}
+
+void drawPetFace(int x, int y) {
+  uint16_t faceColor = COLOR_PRIMARY;
+
+  // Mood check
+  if (myPet.hunger < 30 || myPet.happiness < 30) faceColor = COLOR_WARN;
+  if (myPet.hunger < 10 || myPet.energy < 10) faceColor = COLOR_ERROR;
+
+  // Body (Circle)
+  canvas.drawCircle(x, y, 30, faceColor);
+  canvas.drawCircle(x, y, 29, faceColor);
+
+  if (myPet.isSleeping) {
+    // Sleeping Eyes (Lines)
+    canvas.drawLine(x - 15, y - 5, x - 5, y - 5, faceColor);
+    canvas.drawLine(x + 5, y - 5, x + 15, y - 5, faceColor);
+    // Zzz
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setCursor(x + 25, y - 20); canvas.print("Z");
+    canvas.setCursor(x + 32, y - 28); canvas.print("z");
+  } else {
+    // Eyes
+    if (myPet.happiness > 70) {
+      // Happy eyes (Arcs or filled circles)
+      canvas.fillCircle(x - 12, y - 8, 4, faceColor);
+      canvas.fillCircle(x + 12, y - 8, 4, faceColor);
+    } else if (myPet.happiness < 30) {
+      // Sad eyes (X)
+      canvas.drawLine(x - 15, y - 10, x - 9, y - 4, faceColor);
+      canvas.drawLine(x - 15, y - 4, x - 9, y - 10, faceColor);
+      canvas.drawLine(x + 9, y - 10, x + 15, y - 4, faceColor);
+      canvas.drawLine(x + 9, y - 4, x + 15, y - 10, faceColor);
+    } else {
+      // Normal eyes
+      canvas.drawCircle(x - 12, y - 8, 4, faceColor);
+      canvas.drawCircle(x + 12, y - 8, 4, faceColor);
+    }
+
+    // Mouth
+    if (myPet.hunger < 40) {
+      // Hungry/Sad mouth
+      // GFX doesn't strictly have Arc, so use lines
+      canvas.drawLine(x - 8, y + 20, x, y + 15, faceColor);
+      canvas.drawLine(x, y + 15, x + 8, y + 20, faceColor);
+    } else {
+      // Happy mouth (V shape or U shape)
+      canvas.drawLine(x - 8, y + 12, x, y + 18, faceColor);
+      canvas.drawLine(x, y + 18, x + 8, y + 12, faceColor);
+    }
+  }
+}
+
+void drawPetGame() {
+  updatePetLogic();
+
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header Stats
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+
+  // Hunger Bar
+  canvas.setCursor(10, 20); canvas.print("HGR");
+  canvas.drawRect(35, 20, 50, 6, COLOR_BORDER);
+  canvas.fillRect(35, 20, (int)(myPet.hunger / 2), 6, myPet.hunger < 30 ? COLOR_ERROR : COLOR_SUCCESS);
+
+  // Happiness Bar
+  canvas.setCursor(100, 20); canvas.print("HAP");
+  canvas.drawRect(125, 20, 50, 6, COLOR_BORDER);
+  canvas.fillRect(125, 20, (int)(myPet.happiness / 2), 6, myPet.happiness < 30 ? COLOR_WARN : COLOR_ACCENT);
+
+  // Energy Bar
+  canvas.setCursor(190, 20); canvas.print("ENG");
+  canvas.drawRect(215, 20, 50, 6, COLOR_BORDER);
+  canvas.fillRect(215, 20, (int)(myPet.energy / 2), 6, myPet.energy < 30 ? COLOR_ERROR : COLOR_PRIMARY);
+
+  // Draw Pet in Center
+  drawPetFace(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 10);
+
+  // Menu at Bottom
+  const char* items[] = {"Feed", "Play", "Sleep", "Back"};
+  int menuY = SCREEN_HEIGHT - 30;
+  int itemW = SCREEN_WIDTH / 4;
+
+  for (int i = 0; i < 4; i++) {
+    int x = i * itemW;
+    if (i == petMenuSelection) {
+      canvas.fillRect(x + 2, menuY, itemW - 4, 25, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRect(x + 2, menuY, itemW - 4, 25, COLOR_BORDER);
+      canvas.setTextColor(COLOR_TEXT);
+    }
+
+    canvas.setTextSize(1);
+    // Center text
+    int txtW = strlen(items[i]) * 6;
+    canvas.setCursor(x + (itemW - txtW) / 2, menuY + 8);
+    canvas.print(items[i]);
+  }
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -1326,23 +1496,26 @@ void showMainMenu(int x_offset) {
   canvas.print("MAIN MENU");
   canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
   
-  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM"};
-  int itemHeight = 26;
-  int startY = 35;
+  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET"};
+  int itemHeight = 22; // Reduced to fit 6 items
+  int startY = 32;
   
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 6; i++) {
     int y = startY + (i * itemHeight);
     
     if (i == menuSelection) {
-      canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 4, COLOR_PRIMARY);
+      canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
-      canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight - 4, COLOR_BORDER);
+      canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_BORDER);
       canvas.setTextColor(COLOR_PRIMARY);
     }
     
-    canvas.setTextSize(2);
-    canvas.setCursor(15, y + 6);
+    canvas.setTextSize(2); // Keep size 2 if possible, or reduce to 1 if too cramped
+    if (i == 5) canvas.setTextColor(COLOR_ACCENT); // Highlight new feature
+    else if (i != menuSelection) canvas.setTextColor(COLOR_PRIMARY);
+
+    canvas.setCursor(15, y + 4);
     canvas.print(items[i]);
   }
   
@@ -2077,6 +2250,10 @@ void handleMainMenuSelect() {
     case 4:
       changeState(STATE_SYSTEM_PERF);
       break;
+    case 5:
+      loadPetData();
+      changeState(STATE_VPET);
+      break;
   }
 }
 
@@ -2293,6 +2470,9 @@ void refreshCurrentScreen() {
       break;
     case STATE_ESPNOW_PEER_SCAN:
       drawESPNowPeerList();
+      break;
+    case STATE_VPET:
+      drawPetGame();
       break;
     default:
       showMainMenu(x_offset);
@@ -2571,6 +2751,9 @@ void loop() {
         case STATE_CHAT_RESPONSE:
           if (scrollOffset > 0) scrollOffset -= 10;
           break;
+        case STATE_VPET:
+          // Vertical layout isn't used for V-Pet menu, left/right is used
+          break;
         case STATE_ESPNOW_CHAT:
           espnowAutoScroll = false;
           if (espnowScrollIndex > 0) espnowScrollIndex--;
@@ -2583,7 +2766,7 @@ void loop() {
     if (digitalRead(BTN_DOWN) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 4) menuSelection++;
+          if (menuSelection < 5) menuSelection++;
           break;
         case STATE_WIFI_MENU:
           if (menuSelection < 2) menuSelection++;
@@ -2630,6 +2813,9 @@ void loop() {
           espnowBroadcastMode = !espnowBroadcastMode;
           showStatus(espnowBroadcastMode ? "Broadcast\nMode" : "Direct\nMode", 800);
           break;
+        case STATE_VPET:
+          if (petMenuSelection > 0) petMenuSelection--;
+          break;
         case STATE_ESPNOW_PEER_SCAN:
           if (espnowPeerCount > 0) {
              userInput = espnowPeers[selectedPeer].nickname;
@@ -2656,6 +2842,9 @@ void loop() {
           espnowBroadcastMode = !espnowBroadcastMode;
           showStatus(espnowBroadcastMode ? "Broadcast\nMode" : "Direct\nMode", 800);
           break;
+        case STATE_VPET:
+          if (petMenuSelection < 3) petMenuSelection++;
+          break;
         default: break;
       }
       buttonPressed = true;
@@ -2665,6 +2854,25 @@ void loop() {
       switch(currentState) {
         case STATE_MAIN_MENU:
           handleMainMenuSelect();
+          break;
+        case STATE_VPET:
+          if (petMenuSelection == 0) { // Feed
+             myPet.hunger = min(myPet.hunger + 20.0f, 100.0f);
+             showStatus("Yum!", 500);
+          } else if (petMenuSelection == 1) { // Play
+             if (myPet.energy > 10) {
+               myPet.happiness = min(myPet.happiness + 15.0f, 100.0f);
+               myPet.energy -= 10.0f;
+               showStatus("Fun!", 500);
+             } else {
+               showStatus("Too tired!", 500);
+             }
+          } else if (petMenuSelection == 2) { // Sleep
+             myPet.isSleeping = !myPet.isSleeping;
+          } else if (petMenuSelection == 3) { // Back
+             changeState(STATE_MAIN_MENU);
+          }
+          savePetData();
           break;
         case STATE_WIFI_MENU:
           handleWiFiMenuSelect();
