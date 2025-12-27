@@ -2772,6 +2772,17 @@ void handleMainMenuSelect() {
       loadPetData();
       changeState(STATE_VPET);
       break;
+    case 6:
+      changeState(STATE_TOOL_SNIFFER);
+      break;
+    case 7:
+      scanWiFiNetworks(); // Trigger initial scan
+      changeState(STATE_TOOL_NETSCAN);
+      break;
+    case 8:
+      fileListCount = 0; // Force refresh
+      changeState(STATE_TOOL_FILE_MANAGER);
+      break;
   }
 }
 
@@ -3309,6 +3320,9 @@ void loop() {
         case STATE_VPET:
           // Vertical layout isn't used for V-Pet menu, left/right is used
           break;
+        case STATE_TOOL_FILE_MANAGER:
+          if (fileListScroll > 0) fileListScroll--;
+          break;
         case STATE_ESPNOW_CHAT:
           espnowAutoScroll = false;
           if (espnowScrollIndex > 0) espnowScrollIndex--;
@@ -3406,6 +3420,9 @@ void loop() {
         case STATE_VPET:
           if (petMenuSelection < 3) petMenuSelection++;
           break;
+        case STATE_TOOL_FILE_MANAGER:
+           if (fileListScroll < fileListCount - 5) fileListScroll++;
+           break;
         default: break;
       }
       buttonPressed = true;
@@ -3415,6 +3432,12 @@ void loop() {
       switch(currentState) {
         case STATE_MAIN_MENU:
           handleMainMenuSelect();
+          break;
+        case STATE_TOOL_NETSCAN:
+          scanWiFiNetworks();
+          break;
+        case STATE_TOOL_FILE_MANAGER:
+          // Implement File Open
           break;
         case STATE_VPET:
           if (petMenuSelection == 0) { // Feed
