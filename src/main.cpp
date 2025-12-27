@@ -101,8 +101,22 @@ AppState transitionTargetState;
 // ============ API ENDPOINT ============
 const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
 
-// ============ PREFERENCES ============
+// ============ PREFERENCES & CONFIG ============
 Preferences preferences;
+#define CONFIG_FILE "/system.aip"
+
+struct SystemConfig {
+  String ssid;
+  String password;
+  String espnowNick;
+  bool showFPS;
+  float petHunger;
+  float petHappiness;
+  float petEnergy;
+  bool petSleep;
+};
+
+SystemConfig sysConfig = {"", "", "ESP32", false, 80.0f, 80.0f, 80.0f, false};
 
 // ============ GLOBAL VARIABLES ============
 int screenBrightness = 255;
@@ -120,6 +134,14 @@ const unsigned long debounceDelay = 150;
 float menuScrollCurrent = 0.0f;
 float menuScrollTarget = 0.0f;
 float menuVelocity = 0.0f;
+
+struct Particle {
+  float x, y, speed;
+  uint8_t size;
+};
+#define NUM_PARTICLES 30
+Particle particles[NUM_PARTICLES];
+bool particlesInit = false;
 
 // ============ ICONS (32x32) ============
 const unsigned char icon_chat[] PROGMEM = {
@@ -1352,31 +1374,130 @@ String getRecentChatContext(int maxMessages) {
   return context;
 }
 
-// ============ PREFERENCES ============
-void savePreferenceString(const char* key, String value) {
-  preferences.begin("app-config", false);
-  preferences.putString(key, value);
-  preferences.end();
-}
+// ============ CONFIGURATION SYSTEM (SD .aip) ============
+void loadConfig() {
+  // Try SD first
+  if (sdCardMounted && SD.exists(CONFIG_FILE)) {
+    File file = SD.open(CONFIG_FILE, FILE_READ);
+    if (file) {
+      JsonDocument doc;
+      DeserializationError error = deserializeJson(doc, file);
+      if (!error) {
+        sysConfig.ssid = doc["wifi"]["ssid"] | "";
+        sysConfig.password = doc["wifi"]["pass"] | "";
+        sysConfig.espnowNick = doc["sys"]["nick"] | "ESP32";
+        sysConfig.showFPS = doc["sys"]["fps"] | false;
+        sysConfig.petHunger = doc["pet"]["hgr"] | 80.0f;
+        sysConfig.petHappiness = doc["pet"]["hap"] | 80.0f;
+        sysConfig.petEnergy = doc["pet"]["eng"] | 80.0f;
+        sysConfig.petSleep = doc["pet"]["slp"] | false;
 
-String loadPreferenceString(const char* key, String defaultValue) {
+        // Sync to legacy globals if needed
+        myNickname = sysConfig.espnowNick;
+        showFPS = sysConfig.showFPS;
+        myPet.hunger = sysConfig.petHunger;
+        myPet.happiness = sysConfig.petHappiness;
+        myPet.energy = sysConfig.petEnergy;
+        myPet.isSleeping = sysConfig.petSleep;
+
+        Serial.println("Config loaded from SD (.aip)");
+        file.close();
+        return;
+      }
+      file.close();
+    }
+  }
+
+  // Fallback to NVS
   preferences.begin("app-config", true);
-  String value = preferences.getString(key, defaultValue);
+  sysConfig.ssid = preferences.getString("ssid", "");
+  sysConfig.password = preferences.getString("password", "");
+  sysConfig.espnowNick = preferences.getString("espnow_nick", "ESP32");
+  sysConfig.showFPS = preferences.getBool("showFPS", false);
   preferences.end();
-  return value;
+
+  preferences.begin("pet-data", true);
+  sysConfig.petHunger = preferences.getFloat("hunger", 80.0f);
+  sysConfig.petHappiness = preferences.getFloat("happy", 80.0f);
+  sysConfig.petEnergy = preferences.getFloat("energy", 80.0f);
+  sysConfig.petSleep = preferences.getBool("sleep", false);
+  preferences.end();
+
+  // Sync
+  myNickname = sysConfig.espnowNick;
+  showFPS = sysConfig.showFPS;
+  myPet.hunger = sysConfig.petHunger;
+  myPet.happiness = sysConfig.petHappiness;
+  myPet.energy = sysConfig.petEnergy;
+  myPet.isSleeping = sysConfig.petSleep;
+
+  Serial.println("Config loaded from NVS");
 }
 
-void savePreferenceBool(const char* key, bool value) {
+void saveConfig() {
+  // Update struct from globals
+  sysConfig.espnowNick = myNickname;
+  sysConfig.showFPS = showFPS;
+  sysConfig.petHunger = myPet.hunger;
+  sysConfig.petHappiness = myPet.happiness;
+  sysConfig.petEnergy = myPet.energy;
+  sysConfig.petSleep = myPet.isSleeping;
+  // ssid/pass are updated directly
+
+  if (sdCardMounted) {
+    JsonDocument doc;
+    doc["wifi"]["ssid"] = sysConfig.ssid;
+    doc["wifi"]["pass"] = sysConfig.password;
+    doc["sys"]["nick"] = sysConfig.espnowNick;
+    doc["sys"]["fps"] = sysConfig.showFPS;
+    doc["pet"]["hgr"] = sysConfig.petHunger;
+    doc["pet"]["hap"] = sysConfig.petHappiness;
+    doc["pet"]["eng"] = sysConfig.petEnergy;
+    doc["pet"]["slp"] = sysConfig.petSleep;
+
+    File file = SD.open(CONFIG_FILE, FILE_WRITE);
+    if (file) {
+      serializeJson(doc, file);
+      file.close();
+      Serial.println("Config saved to SD (.aip)");
+    }
+  }
+
+  // Always backup to NVS for robustness
   preferences.begin("app-config", false);
-  preferences.putBool(key, value);
+  preferences.putString("ssid", sysConfig.ssid);
+  preferences.putString("password", sysConfig.password);
+  preferences.putString("espnow_nick", sysConfig.espnowNick);
+  preferences.putBool("showFPS", sysConfig.showFPS);
   preferences.end();
+
+  preferences.begin("pet-data", false);
+  preferences.putFloat("hunger", sysConfig.petHunger);
+  preferences.putFloat("happy", sysConfig.petHappiness);
+  preferences.putFloat("energy", sysConfig.petEnergy);
+  preferences.putBool("sleep", sysConfig.petSleep);
+  preferences.end();
+}
+
+// Wrapper for legacy calls
+void savePreferenceString(const char* key, String value) {
+  if (String(key) == "ssid") sysConfig.ssid = value;
+  if (String(key) == "password") sysConfig.password = value;
+  if (String(key) == "espnow_nick") sysConfig.espnowNick = value;
+  saveConfig();
+}
+
+// Add these to fix compilation
+String loadPreferenceString(const char* key, String defaultValue) {
+  if (String(key) == "ssid") return sysConfig.ssid.length() > 0 ? sysConfig.ssid : defaultValue;
+  if (String(key) == "password") return sysConfig.password.length() > 0 ? sysConfig.password : defaultValue;
+  if (String(key) == "espnow_nick") return sysConfig.espnowNick.length() > 0 ? sysConfig.espnowNick : defaultValue;
+  return defaultValue;
 }
 
 bool loadPreferenceBool(const char* key, bool defaultValue) {
-  preferences.begin("app-config", true);
-  bool value = preferences.getBool(key, defaultValue);
-  preferences.end();
-  return value;
+  if (String(key) == "showFPS") return sysConfig.showFPS;
+  return defaultValue;
 }
 
 // ============ NEOPIXEL ============
@@ -1558,64 +1679,93 @@ void showProgressBar(String title, int percent) {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-// ============ MAIN MENU (REALISTIC CAROUSEL) ============
+// ============ MAIN MENU (REALISTIC B&W + PARTICLES) ============
+void updateParticles() {
+  if (!particlesInit) {
+    for (int i = 0; i < NUM_PARTICLES; i++) {
+      particles[i].x = random(0, SCREEN_WIDTH);
+      particles[i].y = random(0, SCREEN_HEIGHT);
+      particles[i].speed = random(10, 50) / 10.0f;
+      particles[i].size = random(1, 3);
+    }
+    particlesInit = true;
+  }
+
+  for (int i = 0; i < NUM_PARTICLES; i++) {
+    particles[i].x -= particles[i].speed;
+    if (particles[i].x < 0) {
+      particles[i].x = SCREEN_WIDTH;
+      particles[i].y = random(0, SCREEN_HEIGHT);
+    }
+  }
+}
+
 void showMainMenu(int x_offset) {
+  updateParticles();
   canvas.fillScreen(COLOR_BG);
+
+  // Draw Particles (Background)
+  for (int i = 0; i < NUM_PARTICLES; i++) {
+    // Dim stars
+    uint16_t color = (particles[i].size > 1) ? 0x8410 : 0x4208; // Dark Gray
+    canvas.fillCircle(particles[i].x, particles[i].y, particles[i].size, color);
+  }
+
+  // Scanline Effect (Horizontal lines)
+  for (int y = 0; y < SCREEN_HEIGHT; y += 4) {
+    canvas.drawFastHLine(0, y, SCREEN_WIDTH, 0x18E3); // Very subtle gray line
+  }
+
   drawStatusBar();
   
-  // No text header requested
   const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET"};
   int numItems = 6;
   
   int centerX = SCREEN_WIDTH / 2;
-  int centerY = SCREEN_HEIGHT / 2 + 10;
-  int iconSpacing = 80; // Space between icons
+  int centerY = SCREEN_HEIGHT / 2 + 5;
+  int iconSpacing = 70;
 
-  // Determine which icon is centered based on physics scroll
   for (int i = 0; i < numItems; i++) {
     float offset = (i - menuScrollCurrent);
     int x = centerX + (offset * iconSpacing);
     int y = centerY;
     
-    // Scale based on distance from center
     float dist = abs(offset);
-    float scale = 1.0f - min(dist * 0.4f, 0.6f); // 1.0 at center, 0.4 at edges
-    if (scale < 0.1f) continue; // Skip if too small/far
+    float scale = 1.0f - min(dist * 0.5f, 0.7f); // Sharper falloff
+    if (scale < 0.1f) continue;
 
-    int w = 32 * scale * 1.5f; // Base size 32 -> 48 max
-    int h = 32 * scale * 1.5f;
+    int boxSize = 48 * scale;
 
-    // Draw Icon (Bitmap)
-    // We need to scale the bitmap manually or draw a rect placeholder if scaling is hard
-    // For "Realistic", let's try to draw the bitmap.
-    // Since GFX doesn't support scaled bitmap drawing easily, we simply center the bitmap
-    // and draw a border box that scales?
-    // Actually, drawing 1:1 bitmap is fastest. Let's just draw 1:1 but position them nicely.
-    // To make it "Realistic", let's use the border box size to simulate depth.
-
-    int boxSize = 50 * scale;
-
+    // Icon Logic
     if (abs(offset) < 0.5f) {
-        // Active Item
-        canvas.drawBitmap(x - 16, y - 16, menuIcons[i], 32, 32, COLOR_PRIMARY);
-        canvas.drawRoundRect(x - boxSize/2 - 4, y - boxSize/2 - 4, boxSize + 8, boxSize + 8, 6, COLOR_ACCENT);
+        // Active: "Glow" effect using concentric rects + Inverted Box
+        // Simulate glow with dithering or just multiple lines
+        for(int k=1; k<4; k++) {
+           canvas.drawRoundRect(x - 24 - k, y - 24 - k, 48 + 2*k, 48 + 2*k, 6, 0x4208); // Dark gray glow
+        }
 
-        // Label at bottom
+        // Main Box
+        canvas.fillRoundRect(x - 24, y - 24, 48, 48, 6, COLOR_PRIMARY); // White box
+        canvas.drawBitmap(x - 16, y - 16, menuIcons[i], 32, 32, COLOR_BG); // Black Icon
+
+        // Label with background for readability
         canvas.setTextSize(1);
-        canvas.setTextColor(COLOR_TEXT);
         int labelW = strlen(items[i]) * 6;
-        canvas.setCursor(centerX - labelW/2, SCREEN_HEIGHT - 15);
+        int labelX = centerX - labelW/2;
+        int labelY = SCREEN_HEIGHT - 25;
+
+        canvas.fillRect(labelX - 4, labelY - 2, labelW + 8, 12, COLOR_BG);
+        canvas.drawRect(labelX - 4, labelY - 2, labelW + 8, 12, COLOR_PRIMARY);
+        canvas.setTextColor(COLOR_PRIMARY);
+        canvas.setCursor(labelX, labelY);
         canvas.print(items[i]);
     } else {
-        // Inactive items
+        // Inactive: Just Outline and Dim Icon
+        canvas.drawRoundRect(x - 24, y - 24, 48, 48, 6, COLOR_DIM);
         canvas.drawBitmap(x - 16, y - 16, menuIcons[i], 32, 32, COLOR_DIM);
-        // canvas.drawRoundRect(x - boxSize/2, y - boxSize/2, boxSize, boxSize, 4, COLOR_DIM);
     }
   }
   
-  // Selection Indicator (Triangle or Line at center)
-  // canvas.fillTriangle(centerX - 5, SCREEN_HEIGHT - 25, centerX + 5, SCREEN_HEIGHT - 25, centerX, SCREEN_HEIGHT - 30, COLOR_ACCENT);
-
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -1749,7 +1899,7 @@ void displayWiFiNetworks(int x_offset) {
       int y = startY + ((i - startIdx) * itemHeight);
       
       if (i == selectedNetwork) {
-        canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_PRIMARY);
+        canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_PRIMARY); // White
         canvas.setTextColor(COLOR_BG);
       } else {
         canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_BORDER);
@@ -1767,17 +1917,26 @@ void displayWiFiNetworks(int x_offset) {
       
       if (networks[i].encrypted) {
         canvas.setCursor(SCREEN_WIDTH - 45, y + 7);
+        // Red Lock if encrypted
+        if (i != selectedNetwork) canvas.setTextColor(0xF800); // Red
         canvas.print("L");
       }
       
       int bars = map(networks[i].rssi, -100, -50, 1, 4);
       bars = constrain(bars, 1, 4);
+
+      // Color code signal strength (Green -> Yellow -> Red)
+      uint16_t signalColor = 0xF800; // Red
+      if (bars > 3) signalColor = 0x07E0; // Green
+      else if (bars > 2) signalColor = 0xFFE0; // Yellow
+
+      if (i == selectedNetwork) signalColor = COLOR_BG; // Invert on selection
+
       int barX = SCREEN_WIDTH - 30;
       for (int b = 0; b < 4; b++) {
         int h = (b + 1) * 2;
         if (b < bars) {
-          canvas.fillRect(barX + (b * 4), y + 13 - h, 2, h, 
-                         i == selectedNetwork ? COLOR_BG : COLOR_PRIMARY);
+          canvas.fillRect(barX + (b * 4), y + 13 - h, 2, h, signalColor);
         } else {
           canvas.drawRect(barX + (b * 4), y + 13 - h, 2, h, COLOR_DIM);
         }
@@ -1991,48 +2150,64 @@ void showLoadingAnimation(int x_offset) {
 void showSystemPerf(int x_offset) {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PRIMARY);
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0x07E0); // Green Header
   canvas.setTextColor(COLOR_BG);
   canvas.setTextSize(2);
   canvas.setCursor(70, 20);
   canvas.print("PERFORMANCE");
-  canvas.setTextColor(COLOR_TEXT);
+
   canvas.setTextSize(1);
-  canvas.setCursor(10, 50);
-  canvas.print("CPU Temp: ");
-  canvas.print(temperatureRead(), 1);
-  canvas.print(" C");
-  canvas.setCursor(10, 65);
-  canvas.print("FPS: ");
-  canvas.print(perfFPS);
-  canvas.print("  LPS: ");
-  canvas.print(perfLPS);
-  canvas.setCursor(10, 80);
-  canvas.print("RAM Free: ");
-  canvas.print(ESP.getFreeHeap() / 1024);
-  canvas.print(" KB");
-  canvas.setCursor(10, 95);
-  canvas.print("Chat Msgs: ");
-  canvas.print(chatMessageCount);
-  canvas.print(" (");
-  canvas.print(chatHistory.length());
-  canvas.print("B)");
+  int y = 50;
+
+  // CPU Temp - Red
+  canvas.setTextColor(0xF800);
+  canvas.setCursor(10, y); canvas.print("CPU Temp: ");
+  canvas.setTextColor(COLOR_TEXT); canvas.print(temperatureRead(), 1); canvas.print(" C");
+
+  y += 15;
+  // FPS - Cyan
+  canvas.setTextColor(0x07FF);
+  canvas.setCursor(10, y); canvas.print("FPS: ");
+  canvas.setTextColor(COLOR_TEXT); canvas.print(perfFPS);
+  canvas.setTextColor(0x07FF); canvas.print("  LPS: ");
+  canvas.setTextColor(COLOR_TEXT); canvas.print(perfLPS);
+
+  y += 15;
+  // RAM - Magenta
+  canvas.setTextColor(0xF81F);
+  canvas.setCursor(10, y); canvas.print("RAM Free: ");
+  canvas.setTextColor(COLOR_TEXT); canvas.print(ESP.getFreeHeap() / 1024); canvas.print(" KB");
+
+  y += 15;
+  // Chat - Yellow
+  canvas.setTextColor(0xFFE0);
+  canvas.setCursor(10, y); canvas.print("Chat Msgs: ");
+  canvas.setTextColor(COLOR_TEXT); canvas.print(chatMessageCount);
+
+  y += 15;
+  // PSRAM - Blue
   if (psramFound()) {
-    canvas.setCursor(10, 110);
-    canvas.print("PSRAM: ");
+    canvas.setTextColor(0x001F);
+    canvas.setCursor(10, y); canvas.print("PSRAM: ");
+    canvas.setTextColor(COLOR_TEXT);
     canvas.print(ESP.getFreePsram() / 1024 / 1024);
     canvas.print(" / ");
     canvas.print(ESP.getPsramSize() / 1024 / 1024);
     canvas.print(" MB");
+    y += 15;
   }
-  canvas.setCursor(10, 125);
-  canvas.print("SD: ");
+
+  // SD - Green
+  canvas.setTextColor(0x07E0);
+  canvas.setCursor(10, y); canvas.print("SD Card: ");
+  canvas.setTextColor(COLOR_TEXT);
   canvas.print(sdCardMounted ? "OK" : "NO");
   if (sdCardMounted) {
     canvas.print(" | ");
     canvas.print(SD.cardSize() / (1024 * 1024));
     canvas.print("MB");
   }
+
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
   canvas.print("BACK=Menu | SELECT=Clear Chat");
@@ -2043,24 +2218,36 @@ void showSystemPerf(int x_offset) {
 void drawCourierTool() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PRIMARY);
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0xF800); // Red Header
   canvas.setTextColor(COLOR_BG);
   canvas.setTextSize(2);
   canvas.setCursor(70, 20);
   canvas.print("COURIER TRACK");
   canvas.setTextColor(COLOR_TEXT);
   canvas.setTextSize(1);
+
   canvas.setCursor(10, 50);
+  canvas.setTextColor(0x07FF); // Cyan
   canvas.print("Resi: ");
+  canvas.setTextColor(COLOR_TEXT);
   canvas.print(bb_resi);
-  canvas.drawRect(10, 70, SCREEN_WIDTH - 20, 30, COLOR_PRIMARY);
+
+  canvas.drawRect(10, 70, SCREEN_WIDTH - 20, 30, 0x07FF);
   int cx = (SCREEN_WIDTH - (courierStatus.length() * 6)) / 2;
   canvas.setCursor(cx, 82);
-  if (isTracking && (millis() / 200) % 2 == 0) {
-    canvas.print("...");
+
+  if (isTracking) {
+      canvas.setTextColor(0xFFE0); // Yellow
+      if ((millis() / 200) % 2 == 0) canvas.print("...");
+      else canvas.print(courierStatus);
   } else {
-    canvas.print(courierStatus);
+      if (courierStatus == "DELIVERED") canvas.setTextColor(0x07E0); // Green
+      else if (courierStatus.indexOf("ERR") != -1) canvas.setTextColor(0xF800); // Red
+      else canvas.setTextColor(COLOR_TEXT);
+      canvas.print(courierStatus);
   }
+
+  canvas.setTextColor(COLOR_TEXT);
   canvas.setCursor(10, 110);
   canvas.print("Location: ");
   canvas.println(courierLastLoc.substring(0, 35));
@@ -2663,9 +2850,13 @@ void setup() {
   SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
   SPI.setFrequency(40000000);
   
-  showFPS = loadPreferenceBool("showFPS", false);
-  myNickname = loadPreferenceString("espnow_nick", "ESP32");
-  Serial.println("✓ Preferences Loaded");
+  loadConfig(); // Load everything
+
+  // showFPS = loadPreferenceBool("showFPS", false);
+  // myNickname = loadPreferenceString("espnow_nick", "ESP32");
+  // Values are already synced in loadConfig()
+
+  Serial.println("✓ Config Loaded");
   Serial.print("ESP-NOW Nickname: ");
   Serial.println(myNickname);
   
