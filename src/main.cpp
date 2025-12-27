@@ -135,12 +135,12 @@ String aiResponse = "";
 int scrollOffset = 0;
 int menuSelection = 0;
 unsigned long lastDebounce = 0;
-const unsigned long debounceDelay = 100;
+const unsigned long debounceDelay = 150;
 
 // ============ UI ANIMATION PHYSICS ============
 float menuScrollCurrent = 0.0f;
 float menuScrollTarget = 0.0f;
-float menuVelocity = 0.0f;
+// float menuVelocity = 0.0f; // Not used in Lerp
 
 struct Particle {
   float x, y, speed;
@@ -3468,22 +3468,17 @@ void loop() {
 
   // Animation Logic
   if (currentState == STATE_MAIN_MENU) {
-      // Smooth Scroll Physics (Spring-like or Lerp)
       menuScrollTarget = (float)menuSelection;
+
+      // Lerp (Exponential Smoothing) - No bounce, stable
+      // "Tekan sekali langsung geser satu fitur dengan smooth"
+      float smoothSpeed = 15.0f;
       float diff = menuScrollTarget - menuScrollCurrent;
 
-      // Spring physics (Snappier)
-      float tension = 30.0f;
-      float friction = 14.0f;
-
-      menuVelocity += (tension * diff) * dt;
-      menuVelocity -= (friction * menuVelocity) * dt;
-      menuScrollCurrent += menuVelocity * dt;
-
-      // Snap near target
-      if (abs(diff) < 0.01f && abs(menuVelocity) < 0.01f) {
+      if (abs(diff) < 0.005f) {
           menuScrollCurrent = menuScrollTarget;
-          menuVelocity = 0.0f;
+      } else {
+          menuScrollCurrent += diff * smoothSpeed * dt;
       }
   }
 
