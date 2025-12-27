@@ -87,7 +87,9 @@ enum AppState {
   STATE_VISUALS_MENU,
   STATE_VIS_STARFIELD,
   STATE_VIS_LIFE,
-  STATE_VIS_FIRE
+  STATE_VIS_FIRE,
+  STATE_ABOUT,
+  STATE_TOOL_WIFI_SONAR
 };
 
 AppState currentState = STATE_BOOT;
@@ -286,7 +288,29 @@ const unsigned char icon_visuals[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_sniffer, icon_netscan, icon_files, icon_visuals};
+const unsigned char icon_about[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x07, 0xE0, 0x00,
+0x00, 0x0F, 0xF0, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x1F, 0xF8, 0x00,
+0x00, 0x1F, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3F, 0xFC, 0x00,
+0x00, 0x7F, 0xFE, 0x00, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x3C, 0x3C, 0x00,
+0x00, 0x3C, 0x3C, 0x00, 0x00, 0x3C, 0x3C, 0x00, 0x00, 0x3C, 0x3C, 0x00, 0x00, 0x3C, 0x3C, 0x00,
+0x00, 0x3C, 0x3C, 0x00, 0x00, 0x3C, 0x3C, 0x00, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x7F, 0xFE, 0x00,
+0x00, 0x7F, 0xFE, 0x00, 0x00, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_sonar[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x70, 0x0E, 0x00,
+0x01, 0xC0, 0x03, 0x80, 0x03, 0x00, 0x00, 0xC0, 0x06, 0x0F, 0xF0, 0x60, 0x0C, 0x38, 0x1C, 0x30,
+0x18, 0x60, 0x06, 0x18, 0x30, 0xC0, 0x03, 0x0C, 0x21, 0x87, 0xE1, 0x84, 0x43, 0x0C, 0x30, 0xC2,
+0x42, 0x18, 0x18, 0x42, 0x86, 0x30, 0x0C, 0x61, 0x84, 0x20, 0x04, 0x21, 0x8C, 0x41, 0x82, 0x31,
+0x88, 0x83, 0xC1, 0x11, 0x88, 0x83, 0xC1, 0x11, 0x8C, 0x41, 0x82, 0x31, 0x84, 0x20, 0x04, 0x21,
+0x86, 0x30, 0x0C, 0x61, 0x42, 0x18, 0x18, 0x42, 0x43, 0x0C, 0x30, 0xC2, 0x21, 0x87, 0xE1, 0x84,
+0x30, 0xC0, 0x03, 0x0C, 0x18, 0x60, 0x06, 0x18, 0x0C, 0x38, 0x1C, 0x30, 0x06, 0x0F, 0xF0, 0x60,
+0x03, 0x00, 0x00, 0xC0, 0x01, 0xC0, 0x03, 0x80, 0x00, 0x70, 0x0E, 0x00, 0x00, 0x1F, 0xF8, 0x00
+};
+
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_sniffer, icon_netscan, icon_files, icon_visuals, icon_about, icon_sonar};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD };
@@ -459,6 +483,14 @@ long snifferPacketCount = 0;
 unsigned long lastSnifferUpdate = 0;
 bool snifferActive = false;
 
+// WiFi Sonar
+#define SONAR_HISTORY_LEN 160
+int sonarHistory[SONAR_HISTORY_LEN];
+int sonarHistoryIdx = 0;
+int lastSonarRSSI = 0;
+unsigned long lastSonarUpdate = 0;
+bool sonarAlert = false;
+
 struct NetDevice {
   String ip;
   String mac;
@@ -560,6 +592,8 @@ void drawVisualsMenu();
 void drawStarfield();
 void drawGameOfLife();
 void drawFireEffect();
+void drawAboutScreen();
+void drawWiFiSonar();
 String getRecentChatContext(int maxMessages);
 
 const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -629,6 +663,11 @@ void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
   } else if (incomingMsg.type == 'H') {
     // Handshake - peer announcing itself
     Serial.println("Handshake received");
+  } else if (incomingMsg.type == 'P') {
+    // Pet Meet
+    showStatus("Pet Found!\nHappiness +", 1500);
+    myPet.happiness = min(myPet.happiness + 20.0f, 100.0f);
+    savePetData();
   }
   
   if (currentState == STATE_ESPNOW_CHAT) {
@@ -1172,11 +1211,11 @@ void drawPetGame() {
   drawPetFace(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 10);
 
   // Menu at Bottom
-  const char* items[] = {"Feed", "Play", "Sleep", "Back"};
+  const char* items[] = {"Feed", "Play", "Meet", "Sleep", "Back"};
   int menuY = SCREEN_HEIGHT - 30;
-  int itemW = SCREEN_WIDTH / 4;
+  int itemW = SCREEN_WIDTH / 5;
 
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 5; i++) {
     int x = i * itemW;
     if (i == petMenuSelection) {
       canvas.fillRect(x + 2, menuY, itemW - 4, 25, COLOR_PRIMARY);
@@ -1478,6 +1517,104 @@ void drawFileManager() {
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
   canvas.print("UP/DN=Scroll | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawAboutScreen() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0x07FF); // Cyan
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(100, 20);
+  canvas.print("ABOUT ME");
+
+  int y = 50;
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(1);
+
+  canvas.setCursor(10, y);
+  canvas.print("Project: AI-Pocket S3");
+  y+=15;
+  canvas.setCursor(10, y);
+  canvas.print("Version: 2.2 (Hacker Edition)");
+  y+=15;
+  canvas.setCursor(10, y);
+  canvas.print("Chip: ESP32-S3 (Dual Core)");
+  y+=15;
+  canvas.setCursor(10, y);
+  canvas.print("RAM: 8MB PSRAM + 512KB SRAM");
+  y+=15;
+  canvas.setCursor(10, y);
+  canvas.print("Created by: Jules & User");
+  y+=15;
+  canvas.setTextColor(0x07E0);
+  canvas.setCursor(10, y);
+  canvas.print("Quote: Adab di atas Ilmu.");
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("L+R = Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawWiFiSonar() {
+  unsigned long now = millis();
+
+  if (now - lastSonarUpdate > 100) {
+    int rssi = WiFi.RSSI();
+    // Normalize RSSI (-30 to -90) to 0-100
+    int val = constrain(map(rssi, -90, -30, 0, 100), 0, 100);
+
+    // Calculate variance/delta
+    int delta = abs(val - lastSonarRSSI);
+    lastSonarRSSI = val;
+
+    sonarHistory[sonarHistoryIdx] = delta;
+    sonarHistoryIdx = (sonarHistoryIdx + 1) % SONAR_HISTORY_LEN;
+
+    if (delta > 15) sonarAlert = true; // Threshold for motion
+    else sonarAlert = false;
+
+    lastSonarUpdate = now;
+  }
+
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  uint16_t headerColor = sonarAlert ? 0xF800 : 0x07E0; // Red if Alert, Green normal
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, headerColor);
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print(sonarAlert ? "MOTION DETECTED!" : "WIFI SONAR ACTIVE");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    canvas.setTextColor(COLOR_ERROR);
+    canvas.setCursor(10, 50);
+    canvas.print("Connect WiFi first!");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  // Draw Graph (Variance)
+  int graphBase = SCREEN_HEIGHT - 10;
+  for(int i=0; i<SONAR_HISTORY_LEN; i++) {
+    int idx = (sonarHistoryIdx + i) % SONAR_HISTORY_LEN;
+    int h = sonarHistory[idx] * 3; // Scale up
+    if (h > 0) canvas.drawFastVLine(i * 2, graphBase - h, h, 0x07FF);
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 45);
+  canvas.print("Target: "); canvas.print(WiFi.SSID());
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("RSSI Delta Graph | L+R = Back");
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -2189,8 +2326,8 @@ void showMainMenu(int x_offset) {
 
   drawStatusBar();
   
-  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "SNIFFER", "NET SCAN", "FILES", "VISUALS"};
-  int numItems = 10;
+  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "SNIFFER", "NET SCAN", "FILES", "VISUALS", "ABOUT", "SONAR"};
+  int numItems = 12;
   
   int centerX = SCREEN_WIDTH / 2;
   int centerY = SCREEN_HEIGHT / 2 + 5;
@@ -3024,6 +3161,17 @@ void handleMainMenuSelect() {
       menuSelection = 0; // Reuse selection for sub-menu
       changeState(STATE_VISUALS_MENU);
       break;
+    case 10:
+      changeState(STATE_ABOUT);
+      break;
+    case 11:
+      if (WiFi.status() != WL_CONNECTED) {
+         showStatus("Connect WiFi\nFirst!", 1000);
+         changeState(STATE_WIFI_MENU);
+      } else {
+         changeState(STATE_TOOL_WIFI_SONAR);
+      }
+      break;
   }
 }
 
@@ -3607,7 +3755,7 @@ void loop() {
     if (digitalRead(BTN_DOWN) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 9) menuSelection++;
+          if (menuSelection < 11) menuSelection++;
           break;
         case STATE_WIFI_MENU:
           if (menuSelection < 2) menuSelection++;
@@ -3687,7 +3835,7 @@ void loop() {
     if (digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 9) menuSelection++;
+          if (menuSelection < 11) menuSelection++;
           break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
@@ -3699,7 +3847,7 @@ void loop() {
           showStatus(espnowBroadcastMode ? "Broadcast\nMode" : "Direct\nMode", 800);
           break;
         case STATE_VPET:
-          if (petMenuSelection < 3) petMenuSelection++;
+          if (petMenuSelection < 4) petMenuSelection++;
           break;
         case STATE_TOOL_FILE_MANAGER:
            // Removed horizontal scroll for file manager, moved to vertical
@@ -3827,6 +3975,8 @@ void loop() {
         case STATE_VIS_STARFIELD:
         case STATE_VIS_LIFE:
         case STATE_VIS_FIRE:
+        case STATE_ABOUT:
+        case STATE_TOOL_WIFI_SONAR:
           // Cleanup
           if (currentState == STATE_TOOL_SNIFFER) {
              esp_wifi_set_promiscuous(false);
