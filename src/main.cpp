@@ -411,6 +411,29 @@ struct VirtualPet {
 VirtualPet myPet = {100.0f, 100.0f, 100.0f, 0, false};
 int petMenuSelection = 0; // 0:Feed, 1:Play, 2:Sleep, 3:Back
 
+// ============ HACKER TOOLS DATA ============
+#define SNIFFER_HISTORY_LEN 160
+int snifferHistory[SNIFFER_HISTORY_LEN];
+int snifferHistoryIdx = 0;
+long snifferPacketCount = 0;
+unsigned long lastSnifferUpdate = 0;
+bool snifferActive = false;
+
+struct NetDevice {
+  String ip;
+  String mac;
+  int ms;
+};
+NetDevice scanResults[10];
+int scanResultCount = 0;
+bool isScanningNet = false;
+int netScanIndex = 0;
+
+String fileList[20];
+int fileListCount = 0;
+int fileListScroll = 0;
+int fileListSelection = 0;
+
 // ============ CONVERSATION CONTEXT STRUCTURE ============
 struct ConversationContext {
   String fullHistory;
@@ -490,9 +513,17 @@ void drawESPNowPeerList();
 void drawPetGame();
 void loadPetData();
 void savePetData();
+void drawSniffer();
+void drawNetScan();
+void drawFileManager();
 String getRecentChatContext(int maxMessages);
 
 const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+// ============ WIFI PROMISCUOUS CALLBACK ============
+void wifiPromiscuous(void* buf, wifi_promiscuous_pkt_type_t type) {
+  snifferPacketCount++;
+}
 
 // ============ ESP-NOW FUNCTIONS ============
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -1042,7 +1073,174 @@ void drawESPNowPeerList() {
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("SELECT=Chat Direct | L+R=Back");
+  canvas.print("SELECT=Chat | LEFT=Rename | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ HACKER TOOLS: SNIFFER, NETSCAN, FILES ============
+void drawSniffer() {
+  if (!snifferActive) {
+    WiFi.disconnect();
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_promiscuous_rx_cb(&wifiPromiscuous);
+    snifferActive = true;
+    snifferPacketCount = 0;
+    memset(snifferHistory, 0, sizeof(snifferHistory));
+  }
+
+  unsigned long now = millis();
+  if (now - lastSnifferUpdate > 100) {
+    snifferHistory[snifferHistoryIdx] = snifferPacketCount; // Store packets per 100ms
+    snifferPacketCount = 0;
+    snifferHistoryIdx = (snifferHistoryIdx + 1) % SNIFFER_HISTORY_LEN;
+    lastSnifferUpdate = now;
+
+    // Channel hopping
+    int ch = (now / 500) % 13 + 1;
+    esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+  }
+
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Matrix Style Header
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0x07E0);
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print("PACKET SNIFFER");
+
+  // Draw Graph
+  int graphBase = SCREEN_HEIGHT - 10;
+  int maxVal = 1;
+  for(int i=0; i<SNIFFER_HISTORY_LEN; i++) if(snifferHistory[i] > maxVal) maxVal = snifferHistory[i];
+
+  for(int i=0; i<SNIFFER_HISTORY_LEN; i++) {
+    int idx = (snifferHistoryIdx + i) % SNIFFER_HISTORY_LEN;
+    int h = map(snifferHistory[idx], 0, maxVal, 0, 100);
+    if(h > 0) canvas.drawFastVLine(i * 2, graphBase - h, h, 0x07FF); // Cyan lines
+  }
+
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 45);
+  canvas.print("CH: "); canvas.print((millis() / 500) % 13 + 1);
+  canvas.print(" | MAX: "); canvas.print(maxVal);
+
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("Scanning... L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawNetScan() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0xFFE0); // Yellow/Amber
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print("NET SCANNER");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    canvas.setTextColor(COLOR_ERROR);
+    canvas.setCursor(10, 50);
+    canvas.print("WiFi Disconnected!");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  // For simplicity, we just list the current connection info and scan networks again but styled differently
+  // Since real IP scan blocks for too long.
+  // Unless we trigger it once.
+
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 45);
+  canvas.print("Local IP: "); canvas.print(WiFi.localIP());
+  canvas.setCursor(10, 55);
+  canvas.print("Gateway: "); canvas.print(WiFi.gatewayIP());
+  canvas.setCursor(10, 65);
+  canvas.print("Subnet: "); canvas.print(WiFi.subnetMask());
+
+  canvas.drawFastHLine(0, 80, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setCursor(10, 85);
+  canvas.setTextColor(0x07FF);
+  canvas.print("NEARBY APs (Passive):");
+
+  int listY = 100;
+  for(int i=0; i<min(networkCount, 5); i++) {
+    canvas.setCursor(10, listY);
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.print(networks[i].ssid.substring(0, 15));
+    canvas.setCursor(120, listY);
+    canvas.print(networks[i].rssi); canvas.print("dB");
+    canvas.setCursor(170, listY);
+    canvas.print(networks[i].encrypted ? "ENC" : "OPEN");
+    listY += 12;
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("Scanning... L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawFileManager() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0x7BEF); // Gray/Blue
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print("FILE MANAGER");
+
+  if (!sdCardMounted) {
+    canvas.setTextColor(COLOR_ERROR);
+    canvas.setCursor(10, 50);
+    canvas.print("SD Card Not Found!");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  // Populate list once
+  if (fileListCount == 0) {
+    File root = SD.open("/");
+    File file = root.openNextFile();
+    while(file && fileListCount < 20) {
+      String name = String(file.name());
+      if (name.startsWith("/")) name = name.substring(1);
+      fileList[fileListCount] = name;
+      fileListCount++;
+      file = root.openNextFile();
+    }
+    root.close();
+  }
+
+  int startY = 45;
+  for(int i=0; i<5; i++) {
+    int idx = i + fileListScroll;
+    if (idx >= fileListCount) break;
+
+    if (idx == fileListSelection) {
+      canvas.fillRect(5, startY + (i*20), SCREEN_WIDTH-10, 18, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRect(5, startY + (i*20), SCREEN_WIDTH-10, 18, COLOR_BORDER);
+      canvas.setTextColor(COLOR_TEXT);
+    }
+
+    canvas.setCursor(10, startY + (i*20) + 5);
+    canvas.print(fileList[idx]);
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("UP/DN=Scroll | L+R=Back");
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -2794,6 +2992,15 @@ void refreshCurrentScreen() {
     case STATE_VPET:
       drawPetGame();
       break;
+    case STATE_TOOL_SNIFFER:
+      drawSniffer();
+      break;
+    case STATE_TOOL_NETSCAN:
+      drawNetScan();
+      break;
+    case STATE_TOOL_FILE_MANAGER:
+      drawFileManager();
+      break;
     default:
       showMainMenu(x_offset);
       break;
@@ -3291,6 +3498,16 @@ void loop() {
         case STATE_WIFI_MENU:
         case STATE_SYSTEM_PERF:
         case STATE_TOOL_COURIER:
+        case STATE_TOOL_SNIFFER:
+        case STATE_TOOL_NETSCAN:
+        case STATE_TOOL_FILE_MANAGER:
+          // Cleanup
+          if (currentState == STATE_TOOL_SNIFFER) {
+             esp_wifi_set_promiscuous(false);
+             snifferActive = false;
+             WiFi.mode(WIFI_STA);
+             WiFi.disconnect();
+          }
           changeState(STATE_MAIN_MENU);
           break;
         case STATE_ESPNOW_MENU:
