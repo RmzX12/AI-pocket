@@ -135,7 +135,7 @@ String aiResponse = "";
 int scrollOffset = 0;
 int menuSelection = 0;
 unsigned long lastDebounce = 0;
-const unsigned long debounceDelay = 150;
+const unsigned long debounceDelay = 100;
 
 // ============ UI ANIMATION PHYSICS ============
 float menuScrollCurrent = 0.0f;
@@ -782,10 +782,10 @@ void drawESPNowChat() {
     uint16_t textColor;
 
     if (chatTheme == 0) { // Modern
-        bubbleColor = msg.isFromMe ? 0x2124 : 0x4208; // Dark Slate Blue / Dark Gray
+        bubbleColor = msg.isFromMe ? 0x4B1F : 0x632F; // Brighter Blue / Purple
         textColor = 0xFFFF;
     } else if (chatTheme == 1) { // Bubble (Light)
-        bubbleColor = msg.isFromMe ? 0x051D : 0xE71C; // Cyan / Light Grey
+        bubbleColor = msg.isFromMe ? 0x07FF : 0xFD20; // Cyan / Orange
         textColor = 0x0000;
     } else { // Cyberpunk
         bubbleColor = msg.isFromMe ? 0xF800 : 0x07E0; // Red / Green
@@ -2189,8 +2189,8 @@ void showMainMenu(int x_offset) {
 
   drawStatusBar();
   
-  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "SNIFFER", "NET SCAN", "FILES"};
-  int numItems = 9;
+  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "SNIFFER", "NET SCAN", "FILES", "VISUALS"};
+  int numItems = 10;
   
   int centerX = SCREEN_WIDTH / 2;
   int centerY = SCREEN_HEIGHT / 2 + 5;
@@ -3472,9 +3472,9 @@ void loop() {
       menuScrollTarget = (float)menuSelection;
       float diff = menuScrollTarget - menuScrollCurrent;
 
-      // Spring physics
-      float tension = 10.0f;
-      float friction = 8.0f;
+      // Spring physics (Snappier)
+      float tension = 30.0f;
+      float friction = 14.0f;
 
       menuVelocity += (tension * diff) * dt;
       menuVelocity -= (friction * menuVelocity) * dt;
@@ -3612,7 +3612,7 @@ void loop() {
     if (digitalRead(BTN_DOWN) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 8) menuSelection++;
+          if (menuSelection < 9) menuSelection++;
           break;
         case STATE_WIFI_MENU:
           if (menuSelection < 2) menuSelection++;
@@ -3692,7 +3692,7 @@ void loop() {
     if (digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 8) menuSelection++;
+          if (menuSelection < 9) menuSelection++;
           break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
