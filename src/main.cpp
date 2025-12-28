@@ -1095,39 +1095,43 @@ void drawHackerToolsMenu() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0xF800); // Red Header
-  canvas.setTextColor(COLOR_BG);
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_hacker, 24, 24, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_TEXT);
   canvas.setTextSize(2);
-  canvas.setCursor(80, 20);
-  canvas.print("HACKER TOOLS");
+  canvas.setCursor(45, 7);
+  canvas.print("Hacker Tools");
 
   const char* items[] = {"WiFi Deauther", "SSID Spammer", "Probe Sniffer", "Packet Monitor", "BLE Spammer", "Deauth Detector", "Back"};
   int numItems = 7;
-  int itemHeight = 19;
-  int startY = 48;
-  int visibleItems = (SCREEN_HEIGHT - startY) / itemHeight;
+  int itemHeight = 22;
+  int itemGap = 3;
+  int startY = 40;
+  int visibleItems = (SCREEN_HEIGHT - startY) / (itemHeight + itemGap);
   int menuScroll = 0;
 
   if (menuSelection >= visibleItems) {
-      menuScroll = (menuSelection - visibleItems + 1) * itemHeight;
+      menuScroll = (menuSelection - visibleItems + 1) * (itemHeight + itemGap);
   }
 
-
   for (int i = 0; i < numItems; i++) {
-    int y = startY + (i * itemHeight) - menuScroll;
+    int y = startY + (i * (itemHeight + itemGap)) - menuScroll;
 
-    if (y < startY || y > SCREEN_HEIGHT - itemHeight) continue;
+    if (y < startY - itemHeight || y > SCREEN_HEIGHT) continue;
 
-    if (i == menuSelection) { // Reusing menuSelection var
-      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_PRIMARY);
+    if (i == menuSelection) {
+      canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
-      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_BORDER);
+      canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
       canvas.setTextColor(COLOR_PRIMARY);
     }
 
     canvas.setTextSize(2);
-    canvas.setCursor(20, y + 3);
+    int textWidth = strlen(items[i]) * 12;
+    canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 4);
     canvas.print(items[i]);
   }
 
@@ -1138,30 +1142,34 @@ void drawVisualsMenu() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
-  canvas.drawFastHLine(0, 13, SCREEN_WIDTH, COLOR_BORDER);
-  canvas.setTextColor(COLOR_PRIMARY);
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_visuals, 24, 24, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_TEXT);
   canvas.setTextSize(2);
-  canvas.setCursor(10, 2);
-  canvas.print("VISUALS");
-  canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setCursor(45, 7);
+  canvas.print("Visuals");
 
   const char* items[] = {"Starfield Warp", "Game of Life", "Doom Fire", "Back"};
-  int itemHeight = 30;
-  int startY = 40;
+  int numItems = 4;
+  int itemHeight = 28;
+  int startY = 45;
 
-  for (int i = 0; i < 4; i++) {
-    int y = startY + (i * itemHeight);
+  for (int i = 0; i < numItems; i++) {
+    int y = startY + (i * (itemHeight + 5));
 
-    if (i == menuSelection) { // Reusing menuSelection var
-      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 4, COLOR_PRIMARY);
+    if (i == menuSelection) {
+      canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
-      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight - 4, COLOR_BORDER);
+      canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
       canvas.setTextColor(COLOR_PRIMARY);
     }
 
     canvas.setTextSize(2);
-    canvas.setCursor(20, y + 6);
+    int textWidth = strlen(items[i]) * 12;
+    canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 7);
     canvas.print(items[i]);
   }
 
@@ -1483,60 +1491,68 @@ void drawPetGame() {
 void drawESPNowMenu() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  
-  canvas.drawFastHLine(0, 13, SCREEN_WIDTH, COLOR_BORDER);
-  canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setTextSize(2);
-  canvas.setCursor(10, 2);
-  canvas.print("ESP-NOW MENU");
-  canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
-  
-  // Status
-  canvas.drawRect(10, 35, SCREEN_WIDTH - 20, 30, COLOR_BORDER);
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_espnow, 24, 24, COLOR_PRIMARY);
   canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("ESP-NOW");
+
+  // Status Panel
+  canvas.fillRoundRect(10, 35, SCREEN_WIDTH - 20, 30, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, 35, SCREEN_WIDTH - 20, 30, 8, COLOR_BORDER);
   canvas.setTextSize(1);
-  canvas.setCursor(15, 42);
-  canvas.print("Status: ");
-  canvas.print(espnowInitialized ? "ACTIVE" : "INACTIVE");
-  canvas.setCursor(15, 54);
+  canvas.setCursor(22, 48);
+  canvas.setTextColor(espnowInitialized ? COLOR_SUCCESS : COLOR_WARN);
+  canvas.print(espnowInitialized ? "INITIALIZED" : "INACTIVE");
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(140, 48);
   canvas.print("Peers: ");
   canvas.print(espnowPeerCount);
   canvas.print(" | Msgs: ");
   canvas.print(espnowMessageCount);
-  
+
+  // Menu Items
   const char* menuItems[] = {"Open Chat", "View Peers", "Set Nickname", "Add Peer (MAC)", "Chat Theme", "Back"};
-  int startY = 66; // Moved up to fit
-  int itemHeight = 18;
+  int numItems = 6;
+  int itemHeight = 22;
+  int startY = 75;
+  int visibleItems = 4;
   int menuScroll = 0;
-  
-  // Simple scrolling logic for menu items
-  if (menuSelection > 4) {
-      menuScroll = (menuSelection - 4) * itemHeight;
+
+  if (menuSelection >= visibleItems) {
+      menuScroll = (menuSelection - visibleItems + 1) * (itemHeight + 3);
   }
 
-  int drawY = startY;
+  for (int i = 0; i < numItems; i++) {
+    int y = startY + (i * (itemHeight + 3)) - menuScroll;
 
-  for (int i = 0; i < 6; i++) {
-    int y = drawY + (i * itemHeight) - menuScroll;
-
-    // Skip if off screen
-    if (y < startY || y > SCREEN_HEIGHT - 20) continue;
+    if (y < startY || y > SCREEN_HEIGHT - itemHeight) continue;
 
     if (i == menuSelection) {
-      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_PRIMARY);
+      canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
-      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_BORDER);
+      canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
       canvas.setTextColor(COLOR_PRIMARY);
     }
     canvas.setTextSize(1);
-    canvas.setCursor(20, y + 5);
-    if (i == 4) {
-       canvas.print("Theme: ");
-       if (chatTheme == 0) canvas.print("Modern");
-       else if (chatTheme == 1) canvas.print("Bubble");
-       else canvas.print("Cyber");
+
+    if (i == 4) { // Chat Theme
+       String themeName = "Modern";
+       if (chatTheme == 1) themeName = "Bubble";
+       else if (chatTheme == 2) themeName = "Cyber";
+       String themeText = "Theme: " + themeName;
+       int textWidth = themeText.length() * 6;
+       canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 7);
+       canvas.print(themeText);
     } else {
+       int textWidth = strlen(menuItems[i]) * 6;
+       canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 7);
        canvas.print(menuItems[i]);
     }
   }
@@ -1770,38 +1786,43 @@ void drawAboutScreen() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0x07FF); // Cyan
-  canvas.setTextColor(COLOR_BG);
-  canvas.setTextSize(2);
-  canvas.setCursor(100, 20);
-  canvas.print("ABOUT ME");
-
-  int y = 50;
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_about, 24, 24, COLOR_PRIMARY);
   canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("About This Device");
+
+  int y = 40;
+
+  // Project Info
+  canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, 50, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, 50, 8, COLOR_BORDER);
   canvas.setTextSize(1);
-
-  canvas.setCursor(10, y);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(20, y + 8);
   canvas.print("Project: AI-Pocket S3");
-  y+=15;
-  canvas.setCursor(10, y);
+  canvas.setCursor(20, y + 20);
   canvas.print("Version: 2.2 (Hacker Edition)");
-  y+=15;
-  canvas.setCursor(10, y);
-  canvas.print("Chip: ESP32-S3 (Dual Core)");
-  y+=15;
-  canvas.setCursor(10, y);
-  canvas.print("RAM: 8MB PSRAM + 512KB SRAM");
-  y+=15;
-  canvas.setCursor(10, y);
-  canvas.print("Created by: Jules & User");
-  y+=15;
-  canvas.setTextColor(0x07E0);
-  canvas.setCursor(10, y);
-  canvas.print("Quote: Adab di atas Ilmu.");
+  canvas.setCursor(20, y + 32);
+  canvas.print("Created by: Ihsan & Subaru");
 
+  y += 55;
+
+  // Device Info
+  canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, 40, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, 40, 8, COLOR_BORDER);
+  canvas.setCursor(20, y + 8);
+  canvas.print("Chip: ESP32-S3 | RAM: 8MB PSRAM");
+  canvas.setCursor(20, y + 20);
+  canvas.print("Flash: 16MB | CPU: 240MHz");
+
+  // Footer
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("L+R = Back");
+  canvas.print("L+R = Back to Main Menu");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -2677,46 +2698,57 @@ void showAIModeSelection(int x_offset) {
 void showWiFiMenu(int x_offset) {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  
-  canvas.drawFastHLine(0, 13, SCREEN_WIDTH, COLOR_BORDER);
-  canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setTextSize(2);
-  canvas.setCursor(10, 2);
-  canvas.print("WIFI MANAGER");
-  canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
-  
-  canvas.drawRect(10, 35, SCREEN_WIDTH - 20, 30, COLOR_BORDER);
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_wifi, 24, 24, COLOR_PRIMARY);
   canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("WiFi Manager");
+
+  // Status Panel
+  canvas.fillRoundRect(10, 40, SCREEN_WIDTH - 20, 45, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, 40, SCREEN_WIDTH - 20, 45, 8, COLOR_BORDER);
   canvas.setTextSize(1);
-  canvas.setCursor(15, 42);
-  
+  canvas.setCursor(22, 50);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.print("STATUS");
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(22, 68);
   if (WiFi.status() == WL_CONNECTED) {
     String ssid = WiFi.SSID();
-    if (ssid.length() > 28) ssid = ssid.substring(0, 28) + "..";
+    if (ssid.length() > 25) ssid = ssid.substring(0, 25) + "...";
     canvas.print(ssid);
-    canvas.setCursor(15, 54);
+    canvas.setCursor(SCREEN_WIDTH - 80, 68);
     canvas.print("RSSI: ");
     canvas.print(cachedRSSI);
-    canvas.print(" dBm");
+    canvas.print("dBm");
   } else {
+    canvas.setTextColor(COLOR_WARN);
     canvas.print("Not Connected");
   }
-  
+
+  // Menu Items
   const char* menuItems[] = {"Scan Networks", "Forget Network", "Back"};
-  int startY = 75;
-  int itemHeight = 28;
-  
+  int startY = 95;
+  int itemHeight = 25;
+
   for (int i = 0; i < 3; i++) {
-    int y = startY + (i * itemHeight);
+    int y = startY + (i * (itemHeight + 5));
     if (i == menuSelection) {
-      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 3, COLOR_PRIMARY);
+      canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
-      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight - 3, COLOR_BORDER);
+      canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
       canvas.setTextColor(COLOR_PRIMARY);
     }
     canvas.setTextSize(2);
-    canvas.setCursor(20, y + 7);
+    // Center text
+    int textWidth = strlen(menuItems[i]) * 12; // 2 * 6
+    canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 5);
     canvas.print(menuItems[i]);
   }
   
@@ -3003,67 +3035,60 @@ void showLoadingAnimation(int x_offset) {
 void showSystemPerf(int x_offset) {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0x07E0); // Green Header
-  canvas.setTextColor(COLOR_BG);
-  canvas.setTextSize(2);
-  canvas.setCursor(70, 20);
-  canvas.print("PERFORMANCE");
 
-  canvas.setTextSize(1);
-  int y = 50;
-
-  // CPU Temp - Red
-  canvas.setTextColor(0xF800);
-  canvas.setCursor(10, y); canvas.print("CPU Temp: ");
-  canvas.setTextColor(COLOR_TEXT); canvas.print(temperatureRead(), 1); canvas.print(" C");
-
-  y += 15;
-  // FPS - Cyan
-  canvas.setTextColor(0x07FF);
-  canvas.setCursor(10, y); canvas.print("FPS: ");
-  canvas.setTextColor(COLOR_TEXT); canvas.print(perfFPS);
-  canvas.setTextColor(0x07FF); canvas.print("  LPS: ");
-  canvas.setTextColor(COLOR_TEXT); canvas.print(perfLPS);
-
-  y += 15;
-  // RAM - Magenta
-  canvas.setTextColor(0xF81F);
-  canvas.setCursor(10, y); canvas.print("RAM Free: ");
-  canvas.setTextColor(COLOR_TEXT); canvas.print(ESP.getFreeHeap() / 1024); canvas.print(" KB");
-
-  y += 15;
-  // Chat - Yellow
-  canvas.setTextColor(0xFFE0);
-  canvas.setCursor(10, y); canvas.print("Chat Msgs: ");
-  canvas.setTextColor(COLOR_TEXT); canvas.print(chatMessageCount);
-
-  y += 15;
-  // PSRAM - Blue
-  if (psramFound()) {
-    canvas.setTextColor(0x001F);
-    canvas.setCursor(10, y); canvas.print("PSRAM: ");
-    canvas.setTextColor(COLOR_TEXT);
-    canvas.print(ESP.getFreePsram() / 1024 / 1024);
-    canvas.print(" / ");
-    canvas.print(ESP.getPsramSize() / 1024 / 1024);
-    canvas.print(" MB");
-    y += 15;
-  }
-
-  // SD - Green
-  canvas.setTextColor(0x07E0);
-  canvas.setCursor(10, y); canvas.print("SD Card: ");
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_system, 24, 24, COLOR_PRIMARY);
   canvas.setTextColor(COLOR_TEXT);
-  canvas.print(sdCardMounted ? "OK" : "NO");
-  if (sdCardMounted) {
-    canvas.print(" | ");
-    canvas.print(SD.cardSize() / (1024 * 1024));
-    canvas.print("MB");
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("System Info");
+
+  int y = 35;
+  canvas.setTextSize(1);
+
+  // Performance Panel
+  canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, 40, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, 40, 8, COLOR_BORDER);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(20, y + 5);
+  canvas.print("PERFORMANCE");
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(20, y + 22);
+  canvas.print("FPS: " + String(perfFPS) + " | LPS: " + String(perfLPS) + " | CPU: " + String(temperatureRead(), 1) + "C");
+
+  y += 45;
+
+  // Memory Panel
+  canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, 55, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, 55, 8, COLOR_BORDER);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(20, y + 5);
+  canvas.print("MEMORY & STORAGE");
+  canvas.setTextColor(COLOR_TEXT);
+
+  canvas.setCursor(20, y + 20);
+  canvas.print("RAM Free: " + String(ESP.getFreeHeap() / 1024) + " KB");
+
+  if (psramFound()) {
+    canvas.setCursor(20, y + 32);
+    canvas.print("PSRAM Free: " + String(ESP.getFreePsram() / 1024) + " KB");
   }
 
+  if (sdCardMounted) {
+    canvas.setCursor(20, y + 44);
+    canvas.print("SD Card: " + String((uint32_t)(SD.usedBytes() / (1024*1024))) + "/" + String((uint32_t)(SD.cardSize() / (1024*1024))) + " MB");
+  } else {
+    canvas.setCursor(20, y + 44);
+    canvas.print("SD Card: Not mounted");
+  }
+
+  // Footer
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("BACK=Menu | SELECT=Clear Chat");
+  canvas.print("SELECT = Clear Chat History | L+R = Back");
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -3071,45 +3096,74 @@ void showSystemPerf(int x_offset) {
 void drawCourierTool() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0xF800); // Red Header
-  canvas.setTextColor(COLOR_BG);
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_courier, 24, 24, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_TEXT);
   canvas.setTextSize(2);
-  canvas.setCursor(70, 20);
-  canvas.print("COURIER TRACK");
-  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(45, 7);
+  canvas.print("Courier Tracker");
+
+  int y = 40;
+
+  // Resi Info
+  canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, 30, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, 30, 8, COLOR_BORDER);
   canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(20, y + 5);
+  canvas.print("RESI");
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(20, y + 17);
+  String temp_kurir = bb_kurir;
+  temp_kurir.toUpperCase();
+  canvas.print(temp_kurir + " - " + bb_resi);
 
-  canvas.setCursor(10, 50);
-  canvas.setTextColor(0x07FF); // Cyan
-  canvas.print("Resi: ");
-  canvas.setTextColor(COLOR_TEXT);
-  canvas.print(bb_resi);
+  y += 35;
 
-  canvas.drawRect(10, 70, SCREEN_WIDTH - 20, 30, 0x07FF);
-  int cx = (SCREEN_WIDTH - (courierStatus.length() * 6)) / 2;
-  canvas.setCursor(cx, 82);
+  // Status
+  canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, 30, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, 30, 8, COLOR_BORDER);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(20, y + 5);
+  canvas.print("STATUS");
 
   if (isTracking) {
       canvas.setTextColor(0xFFE0); // Yellow
-      if ((millis() / 200) % 2 == 0) canvas.print("...");
-      else canvas.print(courierStatus);
-  } else {
-      if (courierStatus == "DELIVERED") canvas.setTextColor(0x07E0); // Green
-      else if (courierStatus.indexOf("ERR") != -1) canvas.setTextColor(0xF800); // Red
-      else canvas.setTextColor(COLOR_TEXT);
-      canvas.print(courierStatus);
+      if ((millis() / 200) % 2 == 0) courierStatus = "TRACKING...";
+      else courierStatus = "TRACKING. .";
   }
 
-  canvas.setTextColor(COLOR_TEXT);
-  canvas.setCursor(10, 110);
-  canvas.print("Location: ");
-  canvas.println(courierLastLoc.substring(0, 35));
-  canvas.setCursor(10, 125);
-  canvas.print("Date: ");
-  canvas.print(courierDate);
+  if (courierStatus.indexOf("DELIVERED") != -1) canvas.setTextColor(COLOR_SUCCESS);
+  else if (courierStatus.indexOf("ERR") != -1) canvas.setTextColor(COLOR_ERROR);
+  else if (isTracking) canvas.setTextColor(0xFFE0);
+  else canvas.setTextColor(COLOR_PRIMARY);
+
+  canvas.setCursor(20, y + 17);
+  canvas.print(courierStatus);
+
+  y += 35;
+
+  // Details
+  canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, 42, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, 42, 8, COLOR_BORDER);
   canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(20, y + 5);
+  canvas.print("DETAILS");
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(20, y + 17);
+  canvas.print("Loc: " + courierLastLoc.substring(0, 35));
+  canvas.setCursor(20, y + 29);
+  canvas.print("Date: " + courierDate);
+
+  // Footer
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("SELECT to check | BACK to exit");
+  canvas.print("SELECT = Track Again | L+R = Back");
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
