@@ -650,6 +650,35 @@ void drawAboutScreen();
 void drawWiFiSonar();
 String getRecentChatContext(int maxMessages);
 
+void drawScrollableMenu(const char* items[], int numItems, int startY, int itemHeight, int itemGap) {
+  int visibleItems = (SCREEN_HEIGHT - startY) / (itemHeight + itemGap);
+  int menuScroll = 0;
+
+  if (menuSelection >= visibleItems) {
+      menuScroll = (menuSelection - visibleItems + 1) * (itemHeight + itemGap);
+  }
+
+  for (int i = 0; i < numItems; i++) {
+    int y = startY + (i * (itemHeight + itemGap)) - menuScroll;
+
+    if (y < startY - itemHeight || y > SCREEN_HEIGHT) continue;
+
+    if (i == menuSelection) {
+      canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
+      canvas.setTextColor(COLOR_PRIMARY);
+    }
+
+    canvas.setTextSize(2);
+    int textWidth = strlen(items[i]) * 12;
+    canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + (itemHeight / 2) - 6);
+    canvas.print(items[i]);
+  }
+}
+
+
 const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // ============ WIFI PROMISCUOUS CALLBACK ============
@@ -1105,35 +1134,7 @@ void drawHackerToolsMenu() {
   canvas.print("Hacker Tools");
 
   const char* items[] = {"WiFi Deauther", "SSID Spammer", "Probe Sniffer", "Packet Monitor", "BLE Spammer", "Deauth Detector", "Back"};
-  int numItems = 7;
-  int itemHeight = 22;
-  int itemGap = 3;
-  int startY = 40;
-  int visibleItems = (SCREEN_HEIGHT - startY) / (itemHeight + itemGap);
-  int menuScroll = 0;
-
-  if (menuSelection >= visibleItems) {
-      menuScroll = (menuSelection - visibleItems + 1) * (itemHeight + itemGap);
-  }
-
-  for (int i = 0; i < numItems; i++) {
-    int y = startY + (i * (itemHeight + itemGap)) - menuScroll;
-
-    if (y < startY - itemHeight || y > SCREEN_HEIGHT) continue;
-
-    if (i == menuSelection) {
-      canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
-      canvas.setTextColor(COLOR_BG);
-    } else {
-      canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
-      canvas.setTextColor(COLOR_PRIMARY);
-    }
-
-    canvas.setTextSize(2);
-    int textWidth = strlen(items[i]) * 12;
-    canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 4);
-    canvas.print(items[i]);
-  }
+  drawScrollableMenu(items, 7, 40, 22, 3);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -1152,26 +1153,7 @@ void drawVisualsMenu() {
   canvas.print("Visuals");
 
   const char* items[] = {"Starfield Warp", "Game of Life", "Doom Fire", "Back"};
-  int numItems = 4;
-  int itemHeight = 28;
-  int startY = 45;
-
-  for (int i = 0; i < numItems; i++) {
-    int y = startY + (i * (itemHeight + 5));
-
-    if (i == menuSelection) {
-      canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
-      canvas.setTextColor(COLOR_BG);
-    } else {
-      canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
-      canvas.setTextColor(COLOR_PRIMARY);
-    }
-
-    canvas.setTextSize(2);
-    int textWidth = strlen(items[i]) * 12;
-    canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 7);
-    canvas.print(items[i]);
-  }
+  drawScrollableMenu(items, 4, 45, 28, 5);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -1531,7 +1513,7 @@ void drawESPNowMenu() {
   for (int i = 0; i < numItems; i++) {
     int y = startY + (i * (itemHeight + 3)) - menuScroll;
 
-    if (y < startY || y > SCREEN_HEIGHT - itemHeight) continue;
+    if (y < startY - itemHeight || y > SCREEN_HEIGHT) continue;
 
     if (i == menuSelection) {
       canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
@@ -1540,19 +1522,19 @@ void drawESPNowMenu() {
       canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
       canvas.setTextColor(COLOR_PRIMARY);
     }
-    canvas.setTextSize(1);
+    canvas.setTextSize(2);
 
     if (i == 4) { // Chat Theme
        String themeName = "Modern";
        if (chatTheme == 1) themeName = "Bubble";
        else if (chatTheme == 2) themeName = "Cyber";
        String themeText = "Theme: " + themeName;
-       int textWidth = themeText.length() * 6;
-       canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 7);
+       int textWidth = themeText.length() * 12;
+       canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 4);
        canvas.print(themeText);
     } else {
-       int textWidth = strlen(menuItems[i]) * 6;
-       canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 7);
+       int textWidth = strlen(menuItems[i]) * 12;
+       canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 4);
        canvas.print(menuItems[i]);
     }
   }
@@ -1581,9 +1563,15 @@ void drawESPNowPeerList() {
   } else {
     int startY = 35;
     int itemHeight = 25;
+    int visibleItems = 5;
+    int scrollOffset = 0;
+
+    if (selectedPeer >= visibleItems) {
+        scrollOffset = (selectedPeer - visibleItems + 1);
+    }
     
-    for (int i = 0; i < espnowPeerCount && i < 5; i++) {
-      int y = startY + (i * itemHeight);
+    for (int i = scrollOffset; i < min(espnowPeerCount, scrollOffset + visibleItems); i++) {
+      int y = startY + ((i - scrollOffset) * itemHeight);
       
       if (i == selectedPeer) {
         canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_PRIMARY);
@@ -2733,24 +2721,7 @@ void showWiFiMenu(int x_offset) {
 
   // Menu Items
   const char* menuItems[] = {"Scan Networks", "Forget Network", "Back"};
-  int startY = 95;
-  int itemHeight = 25;
-
-  for (int i = 0; i < 3; i++) {
-    int y = startY + (i * (itemHeight + 5));
-    if (i == menuSelection) {
-      canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
-      canvas.setTextColor(COLOR_BG);
-    } else {
-      canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
-      canvas.setTextColor(COLOR_PRIMARY);
-    }
-    canvas.setTextSize(2);
-    // Center text
-    int textWidth = strlen(menuItems[i]) * 12; // 2 * 6
-    canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 5);
-    canvas.print(menuItems[i]);
-  }
+  drawScrollableMenu(menuItems, 3, 95, 25, 5);
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
