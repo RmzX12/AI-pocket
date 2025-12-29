@@ -114,6 +114,7 @@ enum AppState {
   STATE_VIS_FIRE,
   STATE_GAME_PONG,
   STATE_GAME_RACING,
+  STATE_RACING_MODE_SELECT,
   STATE_ABOUT,
   STATE_TOOL_WIFI_SONAR,
   // Hacker Tools
@@ -226,22 +227,66 @@ PongBall pongBall;
 PongPaddle player1, player2;
 bool pongGameActive = false;
 
-// ============ GAME: RACING ============
-struct TrackSegment {
-  float curvature;
-  float distance;
+// ============ GAME: RACING V2 ============
+#define RACE_MODE_SINGLE 0
+#define RACE_MODE_MULTI 1
+int raceGameMode = RACE_MODE_SINGLE;
+
+struct Car {
+  float x;
+  float y;
+  float z;
+  float speed;
+  float steerAngle;
+  int lap;
 };
-std::vector<TrackSegment> track;
 
-float playerX = 0.0f;     // Player's horizontal position (-1 to 1)
-float playerY = 0.0f;     // Player's distance down the track
-float playerSpeed = 0.0f;
-float roadCurvature = 0.0f;
-float trackDistance = 0.0f;
-float trackCurvature = 0.0f;
+struct Camera {
+  float x;
+  float y;
+  float z;
+};
+
+Car playerCar = {0, 0, 0, 0, 0, 0};
+Car aiCar = {0.5, 0, 10, 0, 0, 0};
+Car opponentCar = {0, 0, 0, 0, 0, 0};
+bool opponentPresent = false;
+unsigned long lastOpponentUpdate = 0;
+
+Camera camera = {0, 1500, -5000};
+
 bool racingGameActive = false;
+#define MAX_ROAD_POINTS 500
+float roadCurvature[MAX_ROAD_POINTS];
+float roadHeight[MAX_ROAD_POINTS];
+int roadPoints = 0;
 
-#define TRACK_LENGTH 500.0f
+unsigned long lastRaceUpdate = 0;
+
+// ESP-NOW Racing Packet
+struct RacePacket {
+  float x;
+  float y;
+  float z;
+  float speed;
+};
+RacePacket outgoingRacePacket;
+RacePacket incomingRacePacket;
+
+
+// Racing sprites (16x16)
+const unsigned char sprite_car_player[] PROGMEM = {
+    0x00, 0x00, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x0f, 0xf0, 0x3f, 0xfc, 0x7f, 0xfe, 0x7f, 0xfe,
+    0xff, 0xff, 0xff, 0xff, 0x7f, 0xfe, 0x7f, 0xfe, 0x3f, 0xfc, 0x0f, 0xf0, 0x07, 0xe0, 0x00, 0x00
+};
+const unsigned char sprite_car_opponent[] PROGMEM = {
+    0x00, 0x00, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x0f, 0xf0, 0x3f, 0xfc, 0x78, 0x1e, 0x78, 0x1e,
+    0xf8, 0x1f, 0xf8, 0x1f, 0x78, 0x1e, 0x78, 0x1e, 0x3f, 0xfc, 0x0f, 0xf0, 0x07, 0xe0, 0x00, 0x00
+};
+const unsigned char sprite_tree[] PROGMEM = {
+    0x01, 0x80, 0x03, 0xc0, 0x07, 0xe0, 0x0f, 0xf0, 0x1f, 0xf8, 0x3f, 0xfc, 0x7f, 0xfe, 0xff, 0xff,
+    0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0
+};
 
 // ============ ICONS (32x32) ============
 const unsigned char icon_chat[] PROGMEM = {
@@ -416,10 +461,13 @@ bool espnowBroadcastMode = true; // true = broadcast, false = unicast to selecte
 String myNickname = "ESP32";
 
 typedef struct struct_message {
-  char type; // 'M' = message, 'H' = hello/handshake, 'P' = ping
-  char text[ESPNOW_MESSAGE_MAX_LEN];
+  char type; // 'M' = message, 'H' = hello/handshake, 'P' = ping, 'R' = race data
   char nickname[32];
   unsigned long timestamp;
+  union {
+    char text[ESPNOW_MESSAGE_MAX_LEN];
+    RacePacket raceData;
+  };
 } struct_message;
 
 struct_message outgoingMsg;
@@ -699,6 +747,10 @@ void drawAboutScreen();
 void drawWiFiSonar();
 String getRecentChatContext(int maxMessages);
 
+float lerp(float a, float b, float f) {
+    return a + f * (b - a);
+}
+
 void drawScrollableMenu(const char* items[], int numItems, int startY, int itemHeight, int itemGap) {
   int visibleItems = (SCREEN_HEIGHT - startY) / (itemHeight + itemGap);
   int menuScroll = 0;
@@ -800,6 +852,14 @@ void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
     showStatus("Pet Found!\nHappiness +", 1500);
     myPet.happiness = min(myPet.happiness + 20.0f, 100.0f);
     savePetData();
+  } else if (incomingMsg.type == 'R') {
+    // Race Data
+    opponentCar.x = incomingMsg.raceData.x;
+    opponentCar.y = incomingMsg.raceData.y;
+    opponentCar.z = incomingMsg.raceData.z;
+    opponentCar.speed = incomingMsg.raceData.speed;
+    opponentPresent = true;
+    lastOpponentUpdate = millis();
   }
   
   if (currentState == STATE_ESPNOW_CHAT) {
@@ -1021,6 +1081,41 @@ void drawESPNowChat() {
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
   canvas.print("SELECT=Type | UP/DN=Scroll | L+R=Back");
   
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawScaledBitmap(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, int16_t h, float scale, uint16_t color) {
+  if (scale <= 0) return;
+  int16_t scaledW = w * scale;
+  int16_t scaledH = h * scale;
+
+  for (int16_t j = 0; j < scaledH; j++) {
+    for (int16_t i = 0; i < scaledW; i++) {
+      int16_t srcX = i / scale;
+      int16_t srcY = j / scale;
+      uint8_t byte = pgm_read_byte(&bitmap[(srcY * w + srcX) / 8]);
+      if (byte & (128 >> (srcX & 7))) {
+        canvas.drawPixel(x + i, y + j, color);
+      }
+    }
+  }
+}
+
+void drawRacingModeSelect() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("Select Race Mode");
+
+  const char* items[] = {"1 Player (vs AI)", "2 Player (ESP-NOW)", "Back"};
+  drawScrollableMenu(items, 3, 45, 30, 5);
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -1365,110 +1460,180 @@ void drawFireEffect() {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-// ============ RACING GAME LOGIC & DRAWING ============
+// ============ RACING GAME V2 LOGIC & DRAWING ============
 void updateRacingLogic() {
-  if (!racingGameActive) {
-    playerX = 0.0f;
-    playerY = 0.0f;
-    playerSpeed = 0.0f;
-    trackDistance = 0.0f;
-    racingGameActive = true;
-  }
+    if (!racingGameActive) {
+        // Reset player and AI cars
+        playerCar = {0, 0, 0, 0, 0, 0};
+        aiCar = {0.5, 0, 10, 80, 0, 0}; // Start AI with some speed
+        opponentCar = {0, 0, 0, 0, 0, 0};
+        opponentPresent = false;
 
-  // Input
-  if (digitalRead(BTN_UP) == BTN_ACT) {
-    playerSpeed += 2.0f * deltaTime;
-  } else {
-    playerSpeed -= 1.0f * deltaTime;
-  }
-  if (digitalRead(BTN_DOWN) == BTN_ACT) {
-    playerSpeed -= 3.0f * deltaTime;
-  }
-  if (digitalRead(BTN_LEFT) == BTN_ACT) {
-    playerX -= 2.0f * deltaTime * (1.0f - playerSpeed / 100.0f);
-  }
-  if (digitalRead(BTN_RIGHT) == BTN_ACT) {
-    playerX += 2.0f * deltaTime * (1.0f - playerSpeed / 100.0f);
-  }
+        // Generate track
+        roadPoints = 0;
+        float currentCurvature = 0;
+        for(int i=0; i<MAX_ROAD_POINTS; i++) {
+            roadCurvature[i] = sin(i * 0.05f) * 2.0f; // Example: sine wave track
+            roadHeight[i] = sin(i * 0.1f) * 300.0f; // Example: sine wave hills
+        }
+        roadPoints = MAX_ROAD_POINTS;
 
-  // Clamp Speed
-  playerSpeed = max(0.0f, min(playerSpeed, 100.0f));
-  playerX = constrain(playerX, -2.0f, 2.0f);
-
-  // Update track
-  trackDistance += playerSpeed * deltaTime;
-
-  // Find current track segment
-  float offset = 0;
-  for (auto &s : track) {
-    if (trackDistance >= offset && trackDistance < offset + s.distance) {
-      trackCurvature = s.curvature;
-      break;
+        racingGameActive = true;
     }
-    offset += s.distance;
-  }
 
-  // Player steer affects road curvature
-  roadCurvature = trackCurvature - playerX * 0.5f;
+    float dt = (millis() - lastRaceUpdate) / 1000.0f;
+    if (dt > 0.1f) dt = 0.1f;
+    lastRaceUpdate = millis();
 
-  // Simple collision
-  if (abs(playerX) >= 1.0f) {
-    playerSpeed *= 0.95; // Slow down if off-road
-  }
+    // --- Player Input ---
+    if (digitalRead(BTN_UP) == BTN_ACT) playerCar.speed += 80.0f * dt;
+    else playerCar.speed -= 40.0f * dt;
+    if (digitalRead(BTN_DOWN) == BTN_ACT) playerCar.speed -= 100.0f * dt;
 
-  if (trackDistance >= TRACK_LENGTH) {
-    trackDistance -= TRACK_LENGTH;
-  }
+    if (digitalRead(BTN_LEFT) == BTN_ACT) playerCar.x -= 2.0f * dt * (playerCar.speed / 150.0f);
+    if (digitalRead(BTN_RIGHT) == BTN_ACT) playerCar.x += 2.0f * dt * (playerCar.speed / 150.0f);
+
+    playerCar.speed = constrain(playerCar.speed, 0, 200);
+    playerCar.x = constrain(playerCar.x, -2, 2);
+
+    // --- Physics ---
+    int playerSegment = (int)(playerCar.z / 100.0f) % roadPoints;
+    float speedPercent = playerCar.speed / 200.0f;
+    playerCar.steerAngle = roadCurvature[playerSegment] * (1.0f - speedPercent);
+    playerCar.x -= playerCar.steerAngle * speedPercent * dt * 2.0f;
+
+    // Hills effect
+    float heightDiff = roadHeight[(playerSegment + 5) % roadPoints] - roadHeight[playerSegment];
+    playerCar.speed -= (heightDiff / 100.0f) * dt * 200.0f;
+
+    // Off-road penalty
+    if (abs(playerCar.x) > 1.0f) {
+        playerCar.speed *= (1.0f - (abs(playerCar.x) - 1.0f) * 0.5f * dt);
+    }
+
+    playerCar.z += playerCar.speed * dt * 2.0f;
+    if (playerCar.z >= roadPoints * 100.0f) playerCar.z -= roadPoints * 100.0f;
+
+    // --- AI Logic ---
+    int aiSegment = (int)(aiCar.z / 100.0f) % roadPoints;
+    float targetX = roadCurvature[aiSegment] * -0.5f; // AI tries to stay in the middle
+    aiCar.x += (targetX - aiCar.x) * 0.1f;
+    aiCar.z += aiCar.speed * dt * 2.0f;
+    if (aiCar.z >= roadPoints * 100.0f) aiCar.z -= roadPoints * 100.0f;
+
+    // --- Multiplayer ---
+    if (raceGameMode == RACE_MODE_MULTI) {
+        outgoingMsg.type = 'R';
+        outgoingMsg.raceData = {playerCar.x, playerCar.y, playerCar.z, playerCar.speed};
+        esp_now_send(broadcastAddress, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
+
+        if (millis() - lastOpponentUpdate > 2000) opponentPresent = false;
+    }
+
+    // --- Camera ---
+    camera.x = -playerCar.x * 2000.0f;
+    camera.z = playerCar.z;
+    camera.y = 500 + roadHeight[playerSegment];
 }
 
 void drawRacingGame() {
-  canvas.fillScreen(0x4A49); // Sky Blue
+    canvas.fillScreen(0x4A49); // Sky Blue
 
-  for (int y = 0; y < SCREEN_HEIGHT / 2; y++) {
-    float perspective = (float)y / (SCREEN_HEIGHT / 2.0f);
+    // --- Draw Parallax Background (Mountains) ---
+    for(int i=0; i<SCREEN_WIDTH; i++) {
+        float mountainHeight = sin((i * 0.1f + camera.z * 0.001f)) * 20 + sin(i * 0.05f + camera.z * 0.002f) * 10;
+        canvas.drawFastVLine(i, SCREEN_HEIGHT/2 - mountainHeight, 100, 0x3A2E);
+    }
 
-    // Road
-    float roadWidth = 0.1f + perspective * 0.8f;
-    float clipWidth = roadWidth * 0.15f;
-    roadWidth *= 0.5f;
+    // --- Draw Road ---
+    float camX = camera.x, camY = camera.y, camZ = camera.z;
+    for (int n = 0; n < SCREEN_HEIGHT / 2; n++) {
+        int y = n + SCREEN_HEIGHT / 2;
+        int segmentIndex = ((int)((camZ + n*20) / 100.0f)) % roadPoints;
+        float segmentPercent = fmod((camZ + n*20) / 100.0f, 1.0f);
 
-    int leftGrass = (0.5f - roadWidth) * SCREEN_WIDTH;
-    int rightGrass = (0.5f + roadWidth) * SCREEN_WIDTH;
-    int leftClip = (0.5f - roadWidth - clipWidth) * SCREEN_WIDTH;
-    int rightClip = (0.5f + roadWidth + clipWidth) * SCREEN_WIDTH;
+        float currentCurvature = lerp(roadCurvature[segmentIndex], roadCurvature[(segmentIndex + 1) % roadPoints], segmentPercent);
+        float currentHeight = lerp(roadHeight[segmentIndex], roadHeight[(segmentIndex+1)%roadPoints], segmentPercent);
 
-    uint16_t grassColor = sin(20.0f * pow(1.0f - perspective, 3) + trackDistance * 0.1f) > 0 ? 0x04E0 : 0x0540; // Light/Dark Green
-    uint16_t clipColor = sin(80.0f * pow(1.0f - perspective, 2) + trackDistance) > 0 ? COLOR_PRIMARY : 0xF800; // White/Red
+        float roadX = 0;
+        for (int i = 0; i < n; i++) {
+            int prevSeg = ((int)((camZ + i*20) / 100.0f)) % roadPoints;
+            roadX += roadCurvature[prevSeg] * (20.0f / 100.0f);
+        }
 
-    // Draw ground
-    canvas.drawFastHLine(0, y + SCREEN_HEIGHT / 2, SCREEN_WIDTH, grassColor);
-    // Apply curvature
-    float curve = (1.0f - perspective) * roadCurvature;
-    int curvedLeftGrass = leftGrass + curve * SCREEN_WIDTH;
-    int curvedRightGrass = rightGrass + curve * SCREEN_WIDTH;
-    int curvedLeftClip = leftClip + curve * SCREEN_WIDTH;
-    int curvedRightClip = rightClip + curve * SCREEN_WIDTH;
+        float perspective = (float)n / (SCREEN_HEIGHT / 2.0f);
+        float roadWidth = 30 + perspective * 800;
 
-    // Draw road
-    canvas.drawFastHLine(curvedLeftGrass, y + SCREEN_HEIGHT / 2, curvedRightGrass - curvedLeftGrass, COLOR_SECONDARY);
-    // Draw rumble strips
-    canvas.drawFastHLine(curvedLeftGrass - (curvedLeftClip - leftClip), y + SCREEN_HEIGHT/2, (curvedLeftClip - leftClip), clipColor);
-    canvas.drawFastHLine(curvedRightGrass, y + SCREEN_HEIGHT/2, (curvedRightClip - rightClip), clipColor);
-  }
+        float screenX = SCREEN_WIDTH/2 + (roadX - camX) * 200.0f / (n*20 + 1) ;
+        float screenY = y;
 
-  // Draw Car (simple rect)
-  int carX = SCREEN_WIDTH / 2 + playerX * 80 - 20;
-  int carY = SCREEN_HEIGHT - 40;
-  canvas.fillRect(carX, carY, 40, 25, 0xF800); // Red Car
+        uint16_t grassColor = (segmentIndex % 20 > 10) ? 0x04E0 : 0x0540;
+        canvas.drawFastHLine(0, y, SCREEN_WIDTH, grassColor);
 
-  // HUD
-  canvas.setTextSize(2);
-  canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setCursor(10, 10);
-  canvas.print((int)playerSpeed);
-  canvas.print(" KM/H");
+        // Road
+        canvas.fillRect(screenX - roadWidth/2, y, roadWidth, 1, COLOR_SECONDARY);
 
-  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+        // Rumble Strips
+        if ((segmentIndex % 20) < 2) {
+            canvas.fillRect(screenX - roadWidth/2 - roadWidth*0.05, y, roadWidth*0.05, 1, 0xF800);
+            canvas.fillRect(screenX + roadWidth/2, y, roadWidth*0.05, 1, 0xF800);
+        }
+    }
+
+    // --- Draw Scenery (Trees) ---
+    for(int i=10; i<100; i+=5) {
+        int segment = ((int)(camera.z / 100.0f) + i) % roadPoints;
+        float dz = (segment * 100.0f) - camera.z;
+        if (dz < 100) continue;
+
+        float objX = -2.5f; // Tree on the left
+        float worldX = objX * 2000.0f;
+
+        float scale = 500.0f / dz;
+        float screenX = SCREEN_WIDTH/2 + scale * (worldX - camera.x);
+        float screenY = SCREEN_HEIGHT/2 + scale * (roadHeight[segment] - camera.y) + SCREEN_HEIGHT/2;
+
+        if (screenX > 0 && screenX < SCREEN_WIDTH) {
+            drawScaledBitmap(screenX - 8*scale, screenY - 16*scale, sprite_tree, 16, 16, scale, 0xFFFF);
+        }
+    }
+
+    // --- Draw Cars ---
+    // Player Car
+    drawScaledBitmap(SCREEN_WIDTH/2 - 32, SCREEN_HEIGHT - 64, sprite_car_player, 16, 16, 4.0, 0xFFFF);
+
+    // AI Car
+    float dx_ai = aiCar.x * 2000.0f - camera.x;
+    float dz_ai = aiCar.z - camera.z;
+    if (dz_ai > 100) {
+        float scale = 500.0f / dz_ai;
+        float screenX = SCREEN_WIDTH/2 + scale * dx_ai;
+        float screenY = SCREEN_HEIGHT/2 + scale * (roadHeight[(int)(aiCar.z/100)%roadPoints] - camera.y) + SCREEN_HEIGHT/2;
+        drawScaledBitmap(screenX - 8*scale, screenY - 16*scale, sprite_car_opponent, 16, 16, scale, 0xFFFF);
+    }
+    // Opponent Car
+    if (opponentPresent) {
+        float dx_op = opponentCar.x * 2000.0f - camera.x;
+        float dz_op = opponentCar.z - camera.z;
+        if (dz_op > 100) {
+            float scale = 500.0f / dz_op;
+            float screenX = SCREEN_WIDTH/2 + scale * dx_op;
+            float screenY = SCREEN_HEIGHT/2 + scale * (roadHeight[(int)(opponentCar.z/100)%roadPoints] - camera.y) + SCREEN_HEIGHT/2;
+            drawScaledBitmap(screenX - 8*scale, screenY - 16*scale, sprite_car_opponent, 16, 16, scale, 0xFFFF);
+        }
+    }
+
+    // --- Draw HUD ---
+    canvas.fillRoundRect(5, 5, 100, 30, 5, COLOR_PANEL);
+    canvas.drawRoundRect(5, 5, 100, 30, 5, COLOR_BORDER);
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setTextSize(2);
+    canvas.setCursor(15, 12);
+    canvas.print((int)playerCar.speed);
+    canvas.setTextSize(1);
+    canvas.print(" KM/H");
+
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 // ============ PONG GAME LOGIC & DRAWING ============
@@ -3757,11 +3922,34 @@ void handleHackerToolsMenuSelect() {
   }
 }
 
+void drawScaledBitmap(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, int16_t h, float scale, uint16_t color);
+void drawRacingModeSelect();
+void handleRacingModeSelect();
+
+void handleRacingModeSelect() {
+  switch(menuSelection) {
+    case 0: // 1 Player
+      raceGameMode = RACE_MODE_SINGLE;
+      racingGameActive = false;
+      changeState(STATE_GAME_RACING);
+      break;
+    case 1: // 2 Player
+      raceGameMode = RACE_MODE_MULTI;
+      racingGameActive = false;
+      changeState(STATE_GAME_RACING);
+      break;
+    case 2: // Back
+      menuSelection = 0;
+      changeState(STATE_GAME_HUB);
+      break;
+  }
+}
+
 void handleGameHubMenuSelect() {
   switch(menuSelection) {
     case 0:
-      racingGameActive = false;
-      changeState(STATE_GAME_RACING);
+      menuSelection = 0;
+      changeState(STATE_RACING_MODE_SELECT);
       break;
     case 1:
       pongGameActive = false;
@@ -4039,11 +4227,14 @@ void refreshCurrentScreen() {
     case STATE_GAME_RACING:
       drawRacingGame();
       break;
+    case STATE_RACING_MODE_SELECT:
+      drawRacingModeSelect();
+      break;
     case STATE_ABOUT:
-      drawAboutScreen();  // ← TAMBAHKAN INI
+      drawAboutScreen();
       break;
     case STATE_TOOL_WIFI_SONAR:
-      drawWiFiSonar();    // ← TAMBAHKAN INI
+      drawWiFiSonar();
       break;
     default:
       showMainMenu(x_offset);
@@ -4089,12 +4280,7 @@ void setup() {
   tft.println("ESP-NOW Ready");
   delay(2000);
   
-  // Create Track
-  track.push_back({0.0f, 10.0f});   // Straight
-  track.push_back({1.0f, 20.0f});   // Right curve
-  track.push_back({0.0f, 30.0f});   // Straight
-  track.push_back({-1.0f, 20.0f});  // Left curve
-  track.push_back({0.0f, 20.0f});   // Straight
+  //
 
   canvas.setTextWrap(false);
   Serial.println("✓ Canvas initialized");
@@ -4519,6 +4705,9 @@ void loop() {
           break;
         case STATE_HACKER_TOOLS_MENU:
           handleHackerToolsMenuSelect();
+          break;
+        case STATE_RACING_MODE_SELECT:
+          handleRacingModeSelect();
           break;
         case STATE_TOOL_DEAUTH_SELECT:
           if (networkCount > 0) {
