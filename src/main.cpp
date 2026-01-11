@@ -114,6 +114,7 @@ enum AppState {
   STATE_VIS_LIFE,
   STATE_VIS_FIRE,
   STATE_GAME_PONG,
+  STATE_GAME_SNAKE,
   STATE_GAME_RACING,
   STATE_PIN_LOCK,
   STATE_CHANGE_PIN,
@@ -229,6 +230,31 @@ struct PongPaddle {
 PongBall pongBall;
 PongPaddle player1, player2;
 bool pongGameActive = false;
+
+// Pong particles
+struct PongParticle {
+  float x, y, vx, vy;
+  int life;
+};
+#define MAX_PONG_PARTICLES 20
+PongParticle pongParticles[MAX_PONG_PARTICLES];
+
+// ============ GAME: SNAKE ============
+#define SNAKE_GRID_WIDTH 32
+#define SNAKE_GRID_HEIGHT 17
+#define SNAKE_GRID_SIZE 10
+struct SnakeSegment {
+  int x, y;
+};
+#define MAX_SNAKE_LENGTH 50
+SnakeSegment snakeBody[MAX_SNAKE_LENGTH];
+int snakeLength;
+SnakeSegment food;
+enum SnakeDirection { SNAKE_UP, SNAKE_DOWN, SNAKE_LEFT, SNAKE_RIGHT };
+SnakeDirection snakeDir;
+bool snakeGameOver;
+int snakeScore;
+unsigned long lastSnakeUpdate = 0;
 
 // ============ GAME: RACING V2 ============
 #define RACE_MODE_SINGLE 0
@@ -766,6 +792,11 @@ void drawWiFiSonar();
 String getRecentChatContext(int maxMessages);
 void drawPinLock(bool isChanging);
 void handlePinLockKeyPress();
+void updateAndDrawPongParticles();
+void triggerPongParticles(float x, float y);
+void drawSnakeGame();
+void updateSnakeLogic();
+
 
 float custom_lerp(float a, float b, float f) {
     return a + f * (b - a);
@@ -1104,6 +1135,44 @@ void drawESPNowChat() {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+void drawSnakeGame() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Draw snake body
+  for (int i = 0; i < snakeLength; i++) {
+    uint16_t color = (i == 0) ? 0x07E0 : 0x05E0; // Head is brighter green
+    canvas.fillRect(snakeBody[i].x * SNAKE_GRID_SIZE, snakeBody[i].y * SNAKE_GRID_SIZE, SNAKE_GRID_SIZE - 1, SNAKE_GRID_SIZE - 1, color);
+  }
+
+  // Draw food
+  canvas.fillCircle(food.x * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, food.y * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, SNAKE_GRID_SIZE / 2 - 1, 0xF800); // Red
+
+  // Draw score
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(5, SCREEN_HEIGHT - 10);
+  canvas.print("Score: ");
+  canvas.print(snakeScore);
+
+  if (snakeGameOver) {
+    canvas.setTextSize(2);
+    canvas.setTextColor(COLOR_ERROR);
+    int16_t x1, y1;
+    uint16_t w, h;
+    canvas.getTextBounds("GAME OVER", 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT - h) / 2);
+    canvas.print("GAME OVER");
+
+    canvas.setTextSize(1);
+    canvas.getTextBounds("SELECT to Restart", 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT + h) / 2 + 10);
+    canvas.print("SELECT to Restart");
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 void drawScaledBitmap(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, int16_t h, float scale, uint16_t color) {
   if (scale <= 0) return;
   int16_t scaledW = w * scale;
@@ -1316,8 +1385,8 @@ void drawGameHubMenu() {
   canvas.setCursor(45, 7);
   canvas.print("Game Hub");
 
-  const char* items[] = {"Racing", "Pong", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
-  drawScrollableMenu(items, 6, 45, 24, 3);
+  const char* items[] = {"Racing", "Pong", "Snake", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
+  drawScrollableMenu(items, 7, 45, 24, 3);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -1490,13 +1559,12 @@ void updateRacingLogic() {
         opponentPresent = false;
 
         // Generate track
-        roadPoints = 0;
+        roadPoints = MAX_ROAD_POINTS;
         float currentCurvature = 0;
         for(int i=0; i<MAX_ROAD_POINTS; i++) {
             roadCurvature[i] = sin(i * 0.05f) * 2.0f; // Example: sine wave track
             roadHeight[i] = sin(i * 0.1f) * 300.0f; // Example: sine wave hills
         }
-        roadPoints = MAX_ROAD_POINTS;
 
         racingGameActive = true;
     }
@@ -1656,6 +1724,32 @@ void drawRacingGame() {
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+void triggerPongParticles(float x, float y) {
+  for (int i = 0; i < MAX_PONG_PARTICLES; i++) {
+    if (pongParticles[i].life <= 0) {
+      pongParticles[i].x = x;
+      pongParticles[i].y = y;
+      pongParticles[i].vx = random(-100, 100) / 50.0f;
+      pongParticles[i].vy = random(-100, 100) / 50.0f;
+      pongParticles[i].life = 20; // Lifetime in frames
+      return; // Spawn one particle per collision
+    }
+  }
+}
+
+void updateAndDrawPongParticles() {
+  for (int i = 0; i < MAX_PONG_PARTICLES; i++) {
+    if (pongParticles[i].life > 0) {
+      pongParticles[i].x += pongParticles[i].vx;
+      pongParticles[i].y += pongParticles[i].vy;
+      pongParticles[i].life--;
+
+      int size = (pongParticles[i].life > 10) ? 2 : 1;
+      canvas.fillRect(pongParticles[i].x, pongParticles[i].y, size, size, COLOR_PRIMARY);
+    }
+  }
+}
+
 // ============ PONG GAME LOGIC & DRAWING ============
 void resetPongBall() {
   pongBall.x = SCREEN_WIDTH / 2;
@@ -1674,6 +1768,8 @@ void updatePongLogic() {
     player2.y = SCREEN_HEIGHT / 2 - 20;
     resetPongBall();
     pongGameActive = true;
+    // Clear particles
+    for(int i=0; i<MAX_PONG_PARTICLES; i++) pongParticles[i].life = 0;
     return;
   }
 
@@ -1687,10 +1783,12 @@ void updatePongLogic() {
   if (pongBall.y < 0) {
     pongBall.y = 0;
     pongBall.vy *= -1;
+    triggerPongParticles(pongBall.x, pongBall.y);
   }
   if (pongBall.y > SCREEN_HEIGHT - 10) {
     pongBall.y = SCREEN_HEIGHT - 10;
     pongBall.vy *= -1;
+    triggerPongParticles(pongBall.x, pongBall.y);
   }
 
   // Paddle collision
@@ -1703,6 +1801,7 @@ void updatePongLogic() {
       pongBall.vx *= -1.1; // Speed up
       // Add spin based on where it hit the paddle
       pongBall.vy += (pongBall.y - (player1.y + PADDLE_HEIGHT / 2)) * 5.0f;
+      triggerPongParticles(pongBall.x, pongBall.y);
     }
   }
   // Player 2 (AI)
@@ -1711,6 +1810,7 @@ void updatePongLogic() {
       pongBall.x = SCREEN_WIDTH - PADDLE_WIDTH - 5;
       pongBall.vx *= -1.1; // Speed up
       pongBall.vy += (pongBall.y - (player2.y + PADDLE_HEIGHT / 2)) * 5.0f;
+      triggerPongParticles(pongBall.x, pongBall.y);
     }
   }
 
@@ -1728,10 +1828,11 @@ void updatePongLogic() {
     resetPongBall();
   }
 
-  // AI Logic
-  float aiSpeed = 3.0f * dt; // AI speed relative to frame time
+  // AI Logic - a bit slower and less perfect
+  float aiSpeed = 2.8f * dt;
   float targetY = pongBall.y - PADDLE_HEIGHT / 2;
-  player2.y += (targetY - player2.y) * aiSpeed;
+  // Add a small delay/lag to the AI's reaction
+  player2.y += (targetY - player2.y) * aiSpeed * 0.8f;
   player2.y = max(0.0f, min((float)(SCREEN_HEIGHT - PADDLE_HEIGHT), player2.y));
 }
 
@@ -1742,6 +1843,8 @@ void drawPongGame() {
   for (int i = 0; i < SCREEN_HEIGHT; i += 10) {
     canvas.drawFastVLine(SCREEN_WIDTH / 2, i, 5, COLOR_PANEL);
   }
+
+  updateAndDrawPongParticles();
 
   // Scores
   canvas.setTextSize(3);
@@ -1764,6 +1867,72 @@ void drawPongGame() {
   canvas.print("L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ SNAKE GAME LOGIC ============
+void initSnakeGame() {
+  snakeLength = 3;
+  snakeBody[0] = {SNAKE_GRID_WIDTH / 2, SNAKE_GRID_HEIGHT / 2};
+  snakeBody[1] = {SNAKE_GRID_WIDTH / 2 - 1, SNAKE_GRID_HEIGHT / 2};
+  snakeBody[2] = {SNAKE_GRID_WIDTH / 2 - 2, SNAKE_GRID_HEIGHT / 2};
+  snakeDir = SNAKE_RIGHT;
+  snakeGameOver = false;
+  snakeScore = 0;
+
+  // Place food
+  food.x = random(0, SNAKE_GRID_WIDTH);
+  food.y = random(0, SNAKE_GRID_HEIGHT);
+
+  lastSnakeUpdate = 0;
+}
+
+void updateSnakeLogic() {
+  if (snakeGameOver) {
+    if (digitalRead(BTN_SELECT) == BTN_ACT) {
+      initSnakeGame();
+    }
+    return;
+  }
+
+  if (millis() - lastSnakeUpdate < 100) { // Game speed
+    return;
+  }
+  lastSnakeUpdate = millis();
+
+  // Move body
+  for (int i = snakeLength - 1; i > 0; i--) {
+    snakeBody[i] = snakeBody[i - 1];
+  }
+
+  // Move head
+  if (snakeDir == SNAKE_UP) snakeBody[0].y--;
+  if (snakeDir == SNAKE_DOWN) snakeBody[0].y++;
+  if (snakeDir == SNAKE_LEFT) snakeBody[0].x--;
+  if (snakeDir == SNAKE_RIGHT) snakeBody[0].x++;
+
+  // Wall collision
+  if (snakeBody[0].x < 0 || snakeBody[0].x >= SNAKE_GRID_WIDTH ||
+      snakeBody[0].y < 0 || snakeBody[0].y >= SNAKE_GRID_HEIGHT) {
+    snakeGameOver = true;
+  }
+
+  // Self collision
+  for (int i = 1; i < snakeLength; i++) {
+    if (snakeBody[0].x == snakeBody[i].x && snakeBody[0].y == snakeBody[i].y) {
+      snakeGameOver = true;
+    }
+  }
+
+  // Food collision
+  if (snakeBody[0].x == food.x && snakeBody[0].y == food.y) {
+    snakeScore += 10;
+    if (snakeLength < MAX_SNAKE_LENGTH) {
+      snakeLength++;
+    }
+    // New food
+    food.x = random(0, SNAKE_GRID_WIDTH);
+    food.y = random(0, SNAKE_GRID_HEIGHT);
+  }
 }
 
 
@@ -4104,15 +4273,19 @@ void handleGameHubMenuSelect() {
       changeState(STATE_GAME_PONG);
       break;
     case 2:
-      changeState(STATE_VIS_STARFIELD);
+      initSnakeGame();
+      changeState(STATE_GAME_SNAKE);
       break;
     case 3:
-      changeState(STATE_VIS_LIFE);
+      changeState(STATE_VIS_STARFIELD);
       break;
     case 4:
-      changeState(STATE_VIS_FIRE);
+      changeState(STATE_VIS_LIFE);
       break;
     case 5:
+      changeState(STATE_VIS_FIRE);
+      break;
+    case 6:
       menuSelection = 0;
       changeState(STATE_MAIN_MENU);
       break;
@@ -4380,6 +4553,9 @@ void refreshCurrentScreen() {
       break;
     case STATE_GAME_PONG:
       drawPongGame();
+      break;
+    case STATE_GAME_SNAKE:
+      drawSnakeGame();
       break;
     case STATE_GAME_RACING:
       drawRacingGame();
@@ -4709,6 +4885,10 @@ void loop() {
     updateRacingLogic();
   }
 
+  if (currentState == STATE_GAME_SNAKE) {
+    updateSnakeLogic();
+  }
+
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
 
@@ -4720,6 +4900,16 @@ void loop() {
       if (digitalRead(BTN_DOWN) == BTN_ACT) {
         player1.y = min(SCREEN_HEIGHT - 40.0f, player1.y + paddleSpeed);
       }
+      if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+        changeState(STATE_GAME_HUB);
+      }
+    }
+
+    if (currentState == STATE_GAME_SNAKE) {
+      if (digitalRead(BTN_UP) == BTN_ACT && snakeDir != SNAKE_DOWN) snakeDir = SNAKE_UP;
+      if (digitalRead(BTN_DOWN) == BTN_ACT && snakeDir != SNAKE_UP) snakeDir = SNAKE_DOWN;
+      if (digitalRead(BTN_LEFT) == BTN_ACT && snakeDir != SNAKE_RIGHT) snakeDir = SNAKE_LEFT;
+      if (digitalRead(BTN_RIGHT) == BTN_ACT && snakeDir != SNAKE_LEFT) snakeDir = SNAKE_RIGHT;
       if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
         changeState(STATE_GAME_HUB);
       }
