@@ -837,9 +837,34 @@ void drawScrollableMenu(const char* items[], int numItems, int startY, int itemH
 const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // ============ API KEY MANAGEMENT ============
+// New helper functions to manage SPI bus between TFT and SD Card
+bool beginSD() {
+  SPI.end();
+  SPI.begin(SDCARD_SCK, SDCARD_MISO, SDCARD_MOSI, SDCARD_CS);
+  if (SD.begin(SDCARD_CS)) {
+    return true;
+  }
+  // If begin fails, revert SPI for TFT
+  SPI.end();
+  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
+  SPI.setFrequency(40000000);
+  return false;
+}
+
+void endSD() {
+  SPI.end();
+  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
+  SPI.setFrequency(40000000);
+}
+
 void loadApiKeys() {
   if (!sdCardMounted) {
     Serial.println("Cannot load API keys, SD card not mounted.");
+    return;
+  }
+
+  if (!beginSD()) {
+    Serial.println("Failed to begin SD for API keys");
     return;
   }
 
@@ -877,6 +902,8 @@ void loadApiKeys() {
     // Show a message on screen for the user
     showStatus("api_keys.json\ncreated.\nPlease edit on PC.", 3000);
   }
+
+  endSD();
 }
 
 // ============ WIFI PROMISCUOUS CALLBACK ============
@@ -2398,18 +2425,24 @@ void drawFileManager() {
     return;
   }
 
-  // Populate list once
   if (fileListCount == 0) {
-    File root = SD.open("/");
-    File file = root.openNextFile();
-    while(file && fileListCount < 20) {
-      String name = String(file.name());
-      if (name.startsWith("/")) name = name.substring(1);
-      fileList[fileListCount] = name;
-      fileListCount++;
-      file = root.openNextFile();
+    if (beginSD()) {
+      File root = SD.open("/");
+      File file = root.openNextFile();
+      while(file && fileListCount < 20) {
+        String name = String(file.name());
+        if (name.startsWith("/")) name = name.substring(1);
+        fileList[fileListCount] = name;
+        fileListCount++;
+        file = root.openNextFile();
+      }
+      root.close();
+      endSD();
+    } else {
+      canvas.setTextColor(COLOR_ERROR);
+      canvas.setCursor(10, 70);
+      canvas.print("SD Mount Failed!");
     }
-    root.close();
   }
 
   int startY = 45;
@@ -2710,72 +2743,38 @@ bool initSDChatFolder() {
 void loadChatHistoryFromSD() {
   chatHistory = "";
   chatMessageCount = 0;
-  
   if (!sdCardMounted) return;
-  
-  SPI.end();
-  SPI.begin(SDCARD_SCK, SDCARD_MISO, SDCARD_MOSI, SDCARD_CS);
-  delay(10);
-  
-  if (!SD.begin(SDCARD_CS)) {
-    SPI.end();
-    SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
-    return;
+
+  if (!beginSD()) return;
+
+  if (initSDChatFolder() && SD.exists(CHAT_HISTORY_FILE)) {
+    File file = SD.open(CHAT_HISTORY_FILE, FILE_READ);
+    if (file) {
+      while (file.available() && chatHistory.length() < MAX_HISTORY_SIZE) {
+        chatHistory += (char)file.read();
+      }
+      file.close();
+
+      int userCount = 0;
+      int pos = 0;
+      while ((pos = chatHistory.indexOf("User:", pos)) != -1) {
+        userCount++;
+        pos += 5;
+      }
+      chatMessageCount = userCount;
+    }
   }
   
-  if (!initSDChatFolder()) {
-    SPI.end();
-    SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
-    return;
-  }
-  
-  if (!SD.exists(CHAT_HISTORY_FILE)) {
-    SPI.end();
-    SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
-    return;
-  }
-  
-  File file = SD.open(CHAT_HISTORY_FILE, FILE_READ);
-  if (!file) {
-    SPI.end();
-    SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
-    return;
-  }
-  
-  while (file.available() && chatHistory.length() < MAX_HISTORY_SIZE) {
-    chatHistory += (char)file.read();
-  }
-  file.close();
-  
-  int userCount = 0;
-  int pos = 0;
-  while ((pos = chatHistory.indexOf("User:", pos)) != -1) {
-    userCount++;
-    pos += 5;
-  }
-  chatMessageCount = userCount;
-  
-  SPI.end();
-  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
-  SPI.setFrequency(40000000);
+  endSD();
 }
 
 void appendChatToSD(String userText, String aiText) {
   if (!sdCardMounted) return;
-  
-  SPI.end();
-  SPI.begin(SDCARD_SCK, SDCARD_MISO, SDCARD_MOSI, SDCARD_CS);
-  delay(10);
-  
-  if (!SD.begin(SDCARD_CS)) {
-    SPI.end();
-    SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
-    return;
-  }
-  
+
+  if (!beginSD()) return;
+
   if (!initSDChatFolder()) {
-    SPI.end();
-    SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
+    endSD();
     return;
   }
   
@@ -2816,8 +2815,7 @@ void appendChatToSD(String userText, String aiText) {
   if (!file) {
     file = SD.open(CHAT_HISTORY_FILE, FILE_WRITE);
     if (!file) {
-      SPI.end();
-      SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
+      endSD();
       return;
     }
   }
@@ -2838,45 +2836,32 @@ void appendChatToSD(String userText, String aiText) {
   
   chatHistory += memoryEntry;
   chatMessageCount++;
-  
-  SPI.end();
-  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
-  SPI.setFrequency(40000000);
+
+  endSD();
 }
 
 void clearChatHistory() {
   chatHistory = "";
   chatMessageCount = 0;
-  
   if (!sdCardMounted) {
     showStatus("SD not ready", 1500);
     return;
   }
   
-  SPI.end();
-  SPI.begin(SDCARD_SCK, SDCARD_MISO, SDCARD_MOSI, SDCARD_CS);
-  delay(10);
-  
-  if (!SD.begin(SDCARD_CS)) {
-    SPI.end();
-    SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
-    showStatus("SD init failed", 1500);
-    return;
-  }
-  
-  if (SD.exists(CHAT_HISTORY_FILE)) {
-    if (SD.remove(CHAT_HISTORY_FILE)) {
-      showStatus("Chat history\ncleared!", 1500);
+  if (beginSD()) {
+    if (SD.exists(CHAT_HISTORY_FILE)) {
+      if (SD.remove(CHAT_HISTORY_FILE)) {
+        showStatus("Chat history\ncleared!", 1500);
+      } else {
+        showStatus("Delete failed!", 1500);
+      }
     } else {
-      showStatus("Delete failed!", 1500);
+      showStatus("No history\nfound", 1500);
     }
+    endSD();
   } else {
-    showStatus("No history\nfound", 1500);
+    showStatus("SD init failed", 1500);
   }
-  
-  SPI.end();
-  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
-  SPI.setFrequency(40000000);
 }
 
 String getRecentChatContext(int maxMessages) {
@@ -2905,10 +2890,11 @@ String getRecentChatContext(int maxMessages) {
 // ============ CONFIGURATION SYSTEM (SD .aip) ============
 void loadConfig() {
   // Try SD first
-  if (sdCardMounted && SD.exists(CONFIG_FILE)) {
-    File file = SD.open(CONFIG_FILE, FILE_READ);
-    if (file) {
-      JsonDocument doc;
+  if (sdCardMounted && beginSD()) {
+    if (SD.exists(CONFIG_FILE)) {
+      File file = SD.open(CONFIG_FILE, FILE_READ);
+      if (file) {
+        JsonDocument doc;
       DeserializationError error = deserializeJson(doc, file);
       if (!error) {
         sysConfig.ssid = doc["wifi"]["ssid"] | "";
@@ -2930,10 +2916,13 @@ void loadConfig() {
 
         Serial.println("Config loaded from SD (.aip)");
         file.close();
+        endSD();
         return;
       }
       file.close();
     }
+    }
+    endSD();
   }
 
   // Fallback to NVS
@@ -2972,7 +2961,7 @@ void saveConfig() {
   sysConfig.petSleep = myPet.isSleeping;
   // ssid/pass are updated directly
 
-  if (sdCardMounted) {
+  if (sdCardMounted && beginSD()) {
     JsonDocument doc;
     doc["wifi"]["ssid"] = sysConfig.ssid;
     doc["wifi"]["pass"] = sysConfig.password;
@@ -2989,6 +2978,7 @@ void saveConfig() {
       file.close();
       Serial.println("Config saved to SD (.aip)");
     }
+    endSD();
   }
 
   // Always backup to NVS for robustness
@@ -4766,30 +4756,27 @@ void setup() {
   Serial.println("✓ NeoPixel: WHITE");
   
   Serial.println("\n--- SD Card Init ---");
-  SPI.end();
-  SPI.begin(SDCARD_SCK, SDCARD_MISO, SDCARD_MOSI, SDCARD_CS);
-  if (SD.begin(SDCARD_CS)) {
+  // Simplified SD card check
+  if (beginSD()) {
     sdCardMounted = true;
-    Serial.println("✓ SD Card Mounted");
-    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-    Serial.printf("  Card Size: %llu MB\n", cardSize);
-    
-    if (initSDChatFolder()) {
-      Serial.println("\n=== LOADING FULL CHAT HISTORY ===");
-      loadChatHistoryFromSD();
-      Serial.println("=================================\n");
-    }
-    // Load API keys from SD card
-    loadApiKeys();
+    Serial.println("✓ SD Card Detected");
+    endSD(); // Release SPI bus for other functions
   } else {
-    Serial.println("⚠ SD Card Mount Failed");
+    sdCardMounted = false;
+    Serial.println("⚠ SD Card Not Found");
   }
+
+  // Load configurations which will handle their own SPI management
+  loadApiKeys();
+  loadConfig();
   
-  SPI.end();
-  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
-  SPI.setFrequency(40000000);
-  
-  loadConfig(); // Load everything
+  if (sdCardMounted) {
+    if (initSDChatFolder()) {
+        Serial.println("\n=== LOADING FULL CHAT HISTORY ===");
+        loadChatHistoryFromSD();
+        Serial.println("=================================\n");
+    }
+  }
 
   // showFPS = loadPreferenceBool("showFPS", false);
   // myNickname = loadPreferenceString("espnow_nick", "ESP32");
