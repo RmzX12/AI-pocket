@@ -47,16 +47,16 @@ typedef struct {
 } deauth_frame_t;
 
 // ============ TFT PINS & CONFIG ============
-#define TFT_CS    10
-#define TFT_DC    9
-#define TFT_RST   13
-#define TFT_MOSI  11
-#define TFT_SCLK  12
-#define TFT_BL    14
-#define TFT_MISO  -1
+#define TFT_CS    7
+#define TFT_DC    15
+#define TFT_RST   16
+#define TFT_MOSI  17
+#define TFT_SCLK  18
+#define TFT_BL    6
+#define TFT_MISO  8
 
 #define SCREEN_WIDTH  320
-#define SCREEN_HEIGHT 170
+#define SCREEN_HEIGHT 172
 
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
